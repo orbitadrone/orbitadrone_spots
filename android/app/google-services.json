@@ -1,0 +1,74 @@
+{
+  "project_info": {
+    "project_number": "254703746068",
+    "project_id": "orbitadrone-84049",
+    "storage_bucket": "orbitadrone-84049.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:254703746068:android:38ffb9607fa2ce2a3a3b01",
+        "android_client_info": {
+          "package_name": "com.orbitadrone_spots"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "254703746068-abgshg9bcjvo6s5gnep5tio1tknqj4m9.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.orbitadrone_spots",
+            "certificate_hash": "dff23a3f32a020cc8a1def650c9337e4f75081b0"
+          }
+        },
+        {
+          "client_id": "254703746068-j4k3ml52uafck7l8ism1p3fjuokgqg17.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.orbitadrone_spots",
+            "certificate_hash": "27d81a7391e5a3c5684f57ad5332a4c4c1bd2d18"
+          }
+        },
+        {
+          "client_id": "254703746068-kqlme7r530s7ut222bb5tfp3vfp4e6ih.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.orbitadrone_spots",
+            "certificate_hash": "5e8f16062ea3cd2c4a0d547876baa6f38cabf625"
+          }
+        },
+        {
+          "client_id": "254703746068-l1s0s7qt8gtkkpj582pdldrd62d4b399.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.orbitadrone_spots",
+            "certificate_hash": "e176c4bb63fe60a6a8f241d330113bfb7903c747"
+          }
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCtiXn_v8fpALPfP54R7KoDdGXy19dXAMQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "254703746068-gr2996v7qn1t7sn2d5qek8859rd5un60.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "254703746068-bqb3464mot645ad12o0m0rs2896fcv72.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.orbitadrone-spots"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

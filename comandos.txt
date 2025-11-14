@@ -1,0 +1,8 @@
+comandos
+  npx react-native run-android
+cd C:\orbitadrone_spots
+  hazme un analisis de los pasos que estamos realizando y dime el por que 
+npm start
+  npm install
+cd C:\orbitadrone_spots_0_01
+  npx react-native start --reset-cache

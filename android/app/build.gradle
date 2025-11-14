@@ -1,0 +1,139 @@
+import java.util.Properties
+
+plugins {
+  id "com.android.application"
+  id "org.jetbrains.kotlin.android"
+  id "com.facebook.react"
+  id "com.google.gms.google-services"
+}
+
+react {
+  autolinkLibrariesWithApp()
+}
+
+def jscFlavor = "org.webkit:android-jsc:+"
+
+def getLocalProperty(String propName) {
+  def propertiesFile = rootProject.file("local.properties")
+  if (!propertiesFile.exists()) {
+    return null
+  }
+
+  def localProperties = new Properties()
+  propertiesFile.withInputStream { stream ->
+    localProperties.load(stream)
+  }
+  return localProperties.getProperty(propName)
+}
+
+def loadPropertiesFileIfExists(String relativePath) {
+  def file = rootProject.file(relativePath)
+  if (!file.exists()) {
+    return null
+  }
+  def properties = new Properties()
+  file.withInputStream { stream ->
+    properties.load(stream)
+  }
+  return properties
+}
+
+def keystoreProperties = loadPropertiesFileIfExists("keystore.properties") ?: new Properties()
+ext.keystoreProperties = keystoreProperties
+
+def resolveSigningProperty(String propName, boolean required = true) {
+  def value = [
+    keystoreProperties?.getProperty(propName),
+    getLocalProperty(propName),
+    project.findProperty(propName),
+    System.getenv(propName)
+  ].find { candidate -> candidate != null && candidate.toString().trim() }
+
+  if (!value && required) {
+    throw new GradleException(
+      "Missing signing property: ${propName}. Provide it via keystore.properties, local.properties, env vars, or -P flags."
+    )
+  }
+
+  return value
+}
+
+def isReleaseTaskRequested() {
+  def requestedTasks = gradle.startParameter.taskNames
+  return requestedTasks.any { taskName ->
+    taskName != null && taskName.toLowerCase().contains("release")
+  }
+}
+
+android {
+  namespace "com.orbitadrone_spots"
+  ndkVersion rootProject.ext.ndkVersion
+  compileSdk rootProject.ext.compileSdkVersion
+
+  defaultConfig {
+    applicationId "com.orbitadrone_spots"
+    minSdkVersion rootProject.ext.minSdkVersion
+    targetSdkVersion rootProject.ext.targetSdkVersion
+    versionCode 14
+    versionName "1.7"
+
+    def mapsApiKey = [
+      getLocalProperty("GOOGLE_MAPS_API_KEY_ANDROID"),
+      project.findProperty("GOOGLE_MAPS_API_KEY_ANDROID"),
+      System.getenv("GOOGLE_MAPS_API_KEY_ANDROID")
+    ].find { value -> value != null && value.toString().trim() }
+
+    if (!mapsApiKey) {
+      println("[Orbitadrone] GOOGLE_MAPS_API_KEY_ANDROID is not set. Android builds will ship without a Maps API key.")
+      mapsApiKey = ""
+    }
+
+    resValue "string", "google_maps_api_key", mapsApiKey
+  }
+
+  signingConfigs {
+    debug {
+      storeFile file("debug.keystore")
+      storePassword "android"
+      keyAlias "androiddebugkey"
+      keyPassword "android"
+    }
+    release {
+      def requireSigning = isReleaseTaskRequested()
+      def keystorePath = resolveSigningProperty("ORBITA_KEYSTORE_FILE", requireSigning)
+      if (keystorePath) {
+        storeFile file(keystorePath)
+        storePassword resolveSigningProperty("ORBITA_KEYSTORE_PASSWORD", requireSigning) ?: ""
+        keyAlias resolveSigningProperty("ORBITA_KEY_ALIAS", requireSigning) ?: ""
+        keyPassword resolveSigningProperty("ORBITA_KEY_PASSWORD", requireSigning) ?: ""
+      } else {
+        println("[Orbitadrone] Release signing config missing. Provide ORBITA_KEYSTORE_* to build signed releases.")
+      }
+    }
+  }
+
+  buildTypes {
+    debug {
+      signingConfig signingConfigs.debug
+    }
+    release {
+      signingConfig signingConfigs.release
+      minifyEnabled true
+      shrinkResources true
+      proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+    }
+  }
+}
+
+dependencies {
+  implementation 'com.google.firebase:firebase-appcheck-playintegrity'
+  implementation("com.facebook.react:react-android")
+  if (hermesEnabled.toBoolean()) {
+    implementation("com.facebook.react:hermes-android")
+  } else {
+    implementation(jscFlavor)
+  }
+  implementation platform("com.google.firebase:firebase-bom:34.4.0")
+}
+
+apply from: project(':react-native-config').projectDir.getPath() + "/dotenv.gradle"
