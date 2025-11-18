@@ -5,7 +5,7 @@ import { Spot, Review, UserProfile, getSpot, getReviewsForSpot, getUserProfile, 
 import { navigateToSpotAfterAd } from '../../src/utils/spotsNavigation';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import CheckBox from '@react-native-community/checkbox';
-import { WebView } from 'react-native-webview';
+import { Platform } from 'react-native';
 import Video from 'react-native-video';
 
 import { Rating } from 'react-native-ratings';
@@ -318,6 +318,8 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
       return;
     }
 
+    console.log('[Video] openVideoModal', trimmedUrl);
+
     const isFirebaseUrl = trimmedUrl.includes('firebasestorage.googleapis.com');
     const bunnyGuidMatch = trimmedUrl.match(
       /\/([0-9a-fA-F-]{36})(?:\/[^/]*)?(?:\?|$)/,
@@ -330,9 +332,17 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
     const isDirectFile =
       /\.(mp4|mov|m4v|webm)(\?|$)/i.test(trimmedUrl);
 
+    console.log('[Video] classify', {
+      isFirebaseUrl,
+      isBunnyUrl,
+      isDirectFile,
+      hasGuid: !!bunnyGuidMatch,
+    });
+
     if (isBunnyUrl && bunnyGuidMatch) {
       const guid = bunnyGuidMatch[1];
       const embedUrl = `https://iframe.mediadelivery.net/embed/${BUNNY_LIBRARY_ID}/${guid}?autoplay=false`;
+      console.log('[Video] using bunny embed', embedUrl);
       setCurrentVideoInfo({
         url: embedUrl,
         type: 'bunny',
@@ -344,6 +354,7 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
 
     const shouldBeNative = isFirebaseUrl || isDirectFile || !isBunnyUrl;
     if (shouldBeNative) {
+      console.log('[Video] using native player', trimmedUrl);
       setCurrentVideoInfo({ url: trimmedUrl, type: 'native' });
       setVideoModalVisible(true);
     }
@@ -730,37 +741,53 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
             <Icon name="close" size={30} color="#fff" />
           </TouchableOpacity>
           
-          {currentVideoInfo &&
-            (currentVideoInfo.type === 'bunny' ? (
-              <WebView
-                style={styles.webview}
-                javaScriptEnabled
-                domStorageEnabled
-                allowsFullscreenVideo
-                allowsInlineMediaPlayback
-                mediaPlaybackRequiresUserAction={false}
-                originWhitelist={['*']}
-                source={{ uri: currentVideoInfo.url }}
-                thirdPartyCookiesEnabled={false}
-                javaScriptCanOpenWindowsAutomatically={false}
-                setSupportMultipleWindows={false}
-                mixedContentMode="always"
-              />
-            ) : (
-              <Video
-                source={{ uri: currentVideoInfo.url }}
-                style={styles.videoPlayer}
-                controls
-                resizeMode="contain"
-                onError={e => {
-                  console.log('Video Error', e);
-                  Alert.alert(
-                    t('alerts.error'),
-                    `${t('alerts.videoPlaybackError')}\n\n${JSON.stringify(e)}`,
+          {currentVideoInfo && (
+            currentVideoInfo.type === 'bunny'
+              ? // Lazy require WebView only on iOS to avoid Android build-time dependency
+                (() => {
+                  console.log('[Video] render bunny', currentVideoInfo);
+                  const { WebView } = require('react-native-webview');
+                  return (
+                    <WebView
+                      style={styles.webview}
+                      javaScriptEnabled
+                      domStorageEnabled
+                      allowsFullscreenVideo
+                      allowsInlineMediaPlayback
+                      mediaPlaybackRequiresUserAction={false}
+                      originWhitelist={['*']}
+                      onShouldStartLoadWithRequest={(request: any) => {
+                        const url = (request?.url || '').toLowerCase();
+                        return url.startsWith('https://iframe.mediadelivery.net/');
+                      }}
+                      source={{ uri: currentVideoInfo.url }}
+                      thirdPartyCookiesEnabled={false}
+                      javaScriptCanOpenWindowsAutomatically={false}
+                      setSupportMultipleWindows={false}
+                      mixedContentMode="never"
+                    />
                   );
-                }}
-              />
-            ))}
+                })()
+              : (
+                  <Video
+                    // Simple render log; full error handling is in onError below
+                    onReadyForDisplay={() =>
+                      console.log('[Video] render native', currentVideoInfo)
+                    }
+                    source={{ uri: currentVideoInfo.url }}
+                    style={styles.videoPlayer}
+                    controls
+                    resizeMode="contain"
+                    onError={e => {
+                      console.log('Video Error', e);
+                      Alert.alert(
+                        t('alerts.error'),
+                        `${t('alerts.videoPlaybackError')}\n\n${JSON.stringify(e)}`,
+                      );
+                    }}
+                  />
+                )
+          )}
         </View>
       </Modal>
     </ScrollView>

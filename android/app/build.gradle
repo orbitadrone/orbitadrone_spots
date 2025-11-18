@@ -66,16 +66,16 @@ def isReleaseTaskRequested() {
 }
 
 android {
-  namespace "com.orbitadrone_spots"
-  ndkVersion rootProject.ext.ndkVersion
-  compileSdk rootProject.ext.compileSdkVersion
+  namespace = "com.orbitadrone_spots"
+  ndkVersion = rootProject.ext.ndkVersion
+  compileSdk = rootProject.ext.compileSdkVersion
 
   defaultConfig {
     applicationId "com.orbitadrone_spots"
-    minSdkVersion rootProject.ext.minSdkVersion
-    targetSdkVersion rootProject.ext.targetSdkVersion
-    versionCode 14
-    versionName "1.7"
+    minSdkVersion = rootProject.ext.minSdkVersion
+    targetSdkVersion = rootProject.ext.targetSdkVersion
+    versionCode = 16
+    versionName = "1.9"
 
     def mapsApiKey = [
       getLocalProperty("GOOGLE_MAPS_API_KEY_ANDROID"),
@@ -91,21 +91,28 @@ android {
     resValue "string", "google_maps_api_key", mapsApiKey
   }
 
+  // Force a recent CMake version compatible with NDK r27 / RN 0.82
+  externalNativeBuild {
+    cmake {
+      version "3.30.5"
+    }
+  }
+
   signingConfigs {
     debug {
-      storeFile file("debug.keystore")
-      storePassword "android"
-      keyAlias "androiddebugkey"
-      keyPassword "android"
+      storeFile = file("debug.keystore")
+      storePassword = "android"
+      keyAlias = "androiddebugkey"
+      keyPassword = "android"
     }
     release {
       def requireSigning = isReleaseTaskRequested()
       def keystorePath = resolveSigningProperty("ORBITA_KEYSTORE_FILE", requireSigning)
       if (keystorePath) {
-        storeFile file(keystorePath)
-        storePassword resolveSigningProperty("ORBITA_KEYSTORE_PASSWORD", requireSigning) ?: ""
-        keyAlias resolveSigningProperty("ORBITA_KEY_ALIAS", requireSigning) ?: ""
-        keyPassword resolveSigningProperty("ORBITA_KEY_PASSWORD", requireSigning) ?: ""
+        storeFile = file(keystorePath)
+        storePassword = resolveSigningProperty("ORBITA_KEYSTORE_PASSWORD", requireSigning) ?: ""
+        keyAlias = resolveSigningProperty("ORBITA_KEY_ALIAS", requireSigning) ?: ""
+        keyPassword = resolveSigningProperty("ORBITA_KEY_PASSWORD", requireSigning) ?: ""
       } else {
         println("[Orbitadrone] Release signing config missing. Provide ORBITA_KEYSTORE_* to build signed releases.")
       }
@@ -114,13 +121,13 @@ android {
 
   buildTypes {
     debug {
-      signingConfig signingConfigs.debug
+      signingConfig = signingConfigs.debug
     }
     release {
-      signingConfig signingConfigs.release
-      minifyEnabled true
-      shrinkResources true
-      proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+      signingConfig = signingConfigs.release
+      minifyEnabled = true
+      shrinkResources = true
+      proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
     }
   }
 }

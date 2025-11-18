@@ -30,7 +30,10 @@ docker run --rm -p 3000:3000 --env-file .env orbitadrone-bunny-backend
 - `BUNNY_STREAM_API_KEY`
 - `BUNNY_CDN_HOST` (e.g., `https://<library>.b-cdn.net`)
 - `FIREBASE_AUTH_REQUIRED` (default `true`). If true, clients must send `Authorization: Bearer <Firebase ID token>`.
-- `GOOGLE_APPLICATION_CREDENTIALS` (path to service account JSON for `firebase-admin`, or use other ADC methods).
+- Firebase Admin credentials (pick **one** strategy):
+  - `FIREBASE_SERVICE_ACCOUNT` (full JSON of the service account).
+  - or `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`.
+  - or `GOOGLE_APPLICATION_CREDENTIALS` pointing to a JSON file path (useful for local dev).
 
 ## Test
 

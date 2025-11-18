@@ -115,6 +115,13 @@ export default function MapScreen() {
 
   // --- Lógica de filtrado ---
   useEffect(() => {
+    // Si no hay filtros activos, mostrar todos los spots
+    if (searchQuery.trim() === '' && selectedStyles.length === 0) {
+      setDisplaySpots(spots);
+      console.log('MapScreen: displaySpots length', spots.length, '(no filters)');
+      return;
+    }
+
     let spotsResult = [...spots];
 
     // 1. Filtrar por texto de búsqueda
@@ -191,6 +198,9 @@ export default function MapScreen() {
     try {
       const fetchedSpots = await getSpots();
       console.log('MapScreen: fetched spots', fetchedSpots.length);
+      if (fetchedSpots.length > 0) {
+        console.log('MapScreen: first spot', JSON.stringify(fetchedSpots[0]));
+      }
       setSpots(Array.isArray(fetchedSpots) ? fetchedSpots : []);
     } catch (err) {
       console.error("Error fetching spots:", err);
@@ -218,10 +228,27 @@ const handleCalloutPress = (spotId: string) => {
   };
 
   const handleGoToSpot = (spot: Spot) => {
+    const coordinates: any = (spot as any).coordinates;
+    const latitude =
+      coordinates?.latitude ??
+      coordinates?._latitude ??
+      (spot as any).latitude ??
+      (spot as any).lat;
+    const longitude =
+      coordinates?.longitude ??
+      coordinates?._longitude ??
+      (spot as any).longitude ??
+      (spot as any).lng ??
+      (spot as any).lon;
+
+    if (typeof latitude !== 'number' || typeof longitude !== 'number') {
+      return;
+    }
+
     const spotRegion = {
-      latitude: spot.coordinates.latitude,
-      longitude: spot.coordinates.longitude,
-      latitudeDelta: 0.01, // Zoom cercano
+      latitude,
+      longitude,
+      latitudeDelta: 0.01,
       longitudeDelta: 0.01,
     };
     mapRef.current?.animateToRegion(spotRegion, 1000);
@@ -271,7 +298,7 @@ const handleCalloutPress = (spotId: string) => {
           showsCompass
           mapType={mapType}
           selectedCoordinate={selectedCoordinate}
-          spots={showSpotsOnZoom ? displaySpots : []}
+          spots={spots}
           showAirZones={false}
           airZones={null}
           handleSpotPress={(spot, event) => handleSpotPress(spot, event)}
@@ -436,6 +463,7 @@ const handleCalloutPress = (spotId: string) => {
           />
         </View>
       )}
+
     </View>
   );
 }

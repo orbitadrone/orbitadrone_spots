@@ -4,6 +4,7 @@ require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const multer = require('multer');
 const admin = require('firebase-admin');
 
@@ -23,7 +24,46 @@ let verifyIdToken = async () => ({ sub: 'anonymous' });
 if (FIREBASE_AUTH_REQUIRED) {
   try {
     if (!admin.apps || admin.apps.length === 0) {
-      admin.initializeApp();
+      // Prefer explicit credentials from env if provided; otherwise fall back to default ADC.
+      const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT;
+      let credential = null;
+
+      if (serviceAccountJson) {
+        try {
+          const parsed = JSON.parse(serviceAccountJson);
+          credential = admin.credential.cert(parsed);
+          // eslint-disable-next-line no-console
+          console.log('[Auth] Using FIREBASE_SERVICE_ACCOUNT env for credentials.');
+        } catch (parseErr) {
+          // eslint-disable-next-line no-console
+          console.warn('[Auth] Failed to parse FIREBASE_SERVICE_ACCOUNT JSON, falling back to other methods.', parseErr);
+        }
+      }
+
+      if (!credential) {
+        const projectId = process.env.FIREBASE_PROJECT_ID;
+        const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+        const privateKey = process.env.FIREBASE_PRIVATE_KEY;
+        if (projectId && clientEmail && privateKey) {
+          credential = admin.credential.cert({
+            projectId,
+            clientEmail,
+            // Replace literal '\n' with real newlines if the key is stored in a single-line env var.
+            privateKey: privateKey.replace(/\\n/g, '\n'),
+          });
+          // eslint-disable-next-line no-console
+          console.log('[Auth] Using FIREBASE_PROJECT_ID / FIREBASE_CLIENT_EMAIL / FIREBASE_PRIVATE_KEY env vars for credentials.');
+        }
+      }
+
+      if (credential) {
+        admin.initializeApp({ credential });
+      } else {
+        // As a last resort, rely on default application credentials (e.g. GOOGLE_APPLICATION_CREDENTIALS).
+        admin.initializeApp();
+        // eslint-disable-next-line no-console
+        console.log('[Auth] Initialized firebase-admin with default application credentials.');
+      }
     }
     verifyIdToken = async (authHeader) => {
       if (!authHeader || !authHeader.toLowerCase().startsWith('bearer ')) {
@@ -46,17 +86,49 @@ const app = express();
 // Parse JSON for non-multipart endpoints (e.g., webhooks)
 app.use(express.json({ limit: '1mb' }));
 
-// Multer temp storage
+// Basic rate limiting to protect upload and webhook endpoints
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 200, // limit each IP to 200 requests per window
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use(limiter);
+
+// Multer temp storage with simple video-only filter
 const upload = multer({
   dest: path.join(require('os').tmpdir(), 'uploads'),
   limits: {
     fileSize: 1024 * 1024 * 500, // 500MB cap
+  },
+  fileFilter: (req, file, cb) => {
+    const mime = (file.mimetype || '').toLowerCase();
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    const isVideoMime = mime.startsWith('video/');
+    const allowedExt = ['.mp4', '.mov', '.m4v', '.webm'];
+    if (isVideoMime || allowedExt.includes(ext)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only video files are allowed'));
+    }
   },
 });
 
 const PRIMARY_BASE = 'https://video.bunnycdn.com/library';
 const basicAuthHeader =
   'Basic ' + Buffer.from(`${LIB_ID}:${STREAM_KEY}`).toString('base64');
+
+// Helper: fetch with timeout
+async function fetchWithTimeout(url, options = {}, timeoutMs = 30000) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetch(url, { ...options, signal: controller.signal });
+    return resp;
+  } finally {
+    clearTimeout(id);
+  }
+}
 
 app.get('/health', (req, res) => {
   res.json({ ok: true });
@@ -91,7 +163,7 @@ app.post('/bunny/upload', upload.single('file'), async (req, res) => {
     const title = (titleRaw || `Upload ${new Date().toISOString()}`).trim();
 
     // 1) Create video entry
-    const createResp = await fetch(`${PRIMARY_BASE}/${LIB_ID}/videos`, {
+    const createResp = await fetchWithTimeout(`${PRIMARY_BASE}/${LIB_ID}/videos`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -99,7 +171,7 @@ app.post('/bunny/upload', upload.single('file'), async (req, res) => {
         Authorization: basicAuthHeader,
       },
       body: JSON.stringify({ title }),
-    });
+    }, 30000);
     if (!createResp.ok) {
       const txt = await createResp.text().catch(() => '');
       return res.status(createResp.status).send(txt || 'create video failed');
@@ -112,7 +184,7 @@ app.post('/bunny/upload', upload.single('file'), async (req, res) => {
 
     // 2) Upload file stream
     const stream = fs.createReadStream(req.file.path);
-    const uploadResp = await fetch(`${PRIMARY_BASE}/${LIB_ID}/videos/${guid}`, {
+    const uploadResp = await fetchWithTimeout(`${PRIMARY_BASE}/${LIB_ID}/videos/${guid}`, {
       method: 'PUT',
       headers: {
         AccessKey: STREAM_KEY,
@@ -123,7 +195,7 @@ app.post('/bunny/upload', upload.single('file'), async (req, res) => {
       body: stream,
       // Needed for streaming in Node 18 fetch
       duplex: 'half',
-    });
+    }, 5 * 60 * 1000); // 5 minutes timeout for large uploads
     fs.unlink(req.file.path, () => {});
 
     if (!uploadResp.ok) {

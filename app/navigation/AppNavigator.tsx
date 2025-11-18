@@ -12,9 +12,6 @@ import SpotVersionsScreen from '../screens/SpotVersionsScreen'; // Importar Spot
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 import { useTranslation } from 'react-i18next';
-import { Text } from 'react-native';
-
-// ... (other imports)
 
 const Tab = createBottomTabNavigator();
 const Stack = createStackNavigator();
@@ -41,10 +38,6 @@ function MainTabNavigator() {
         headerShown: false,
         tabBarLabelStyle: {
           fontSize: 10,
-        },
-        tabBarStyle: {
-          height: 60,
-          paddingBottom: 5,
         },
       })}
     >

@@ -48,7 +48,6 @@ const MemoizedMapView = memo((
       mapType={mapType}
     >
       {selectedCoordinate && <Marker coordinate={selectedCoordinate} pinColor="green" />}
-      <Marker coordinate={{latitude: 41.3851, longitude: 2.1734}} pinColor="blue" />
       {spots.map((spot: any) => (
         <SpotMarker key={spot.id} spot={spot} handleSpotPress={handleSpotPress} />
       ))}

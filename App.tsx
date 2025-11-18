@@ -1,5 +1,6 @@
 import React, {Suspense, useCallback, useEffect, useRef, useState} from 'react';
 import {Linking, Platform} from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import {I18nextProvider} from 'react-i18next';
 import mobileAds, {AppOpenAd, AdEventType} from 'react-native-google-mobile-ads';
 import Geocoder from 'react-native-geocoding';
@@ -132,6 +133,20 @@ const App: React.FC = () => {
     requestEssentialPermissions();
   }, []);
 
+  // Enable Firebase App Check on Android (Play Integrity)
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const activate = async () => {
+      try {
+        await appCheck().activate('playIntegrity');
+        console.log('Firebase App Check (Android) activated');
+      } catch (error) {
+        console.warn('Firebase App Check activation failed (Android):', error);
+      }
+    };
+    activate();
+  }, []);
+
   useEffect(() => {
     const resolveMapsKey = () => {
       if (Platform.OS === 'android') {
@@ -255,18 +270,20 @@ const App: React.FC = () => {
   }
 
   return (
-    <Suspense fallback={<SplashFallback />}>
-      <I18nextProvider i18n={i18n}>
-        <AuthProvider>
-          <AdProvider>
-            <MapProvider>
-              <AppContent />
-              <Toast />
-            </MapProvider>
-          </AdProvider>
-        </AuthProvider>
-      </I18nextProvider>
-    </Suspense>
+    <SafeAreaProvider>
+      <Suspense fallback={<SplashFallback />}>
+        <I18nextProvider i18n={i18n}>
+          <AuthProvider>
+            <AdProvider>
+              <MapProvider>
+                <AppContent />
+                <Toast />
+              </MapProvider>
+            </AdProvider>
+          </AuthProvider>
+        </I18nextProvider>
+      </Suspense>
+    </SafeAreaProvider>
   );
 };
 

@@ -44,7 +44,13 @@ const SpotVersionsScreen = () => {
       style={styles.card}
       onPress={() => navigation.navigate('SpotDetail', { spotId: item.id })}
     >
-      <Image source={{ uri: item.mainImage }} style={styles.cardImage} />
+      {item.mainImage ? (
+        <Image source={{ uri: item.mainImage }} style={styles.cardImage} />
+      ) : (
+        <View style={[styles.cardImage, styles.cardImagePlaceholder]}>
+          <Icon name="image-off-outline" size={32} color="#ccc" />
+        </View>
+      )}
       <View style={styles.cardContent}>
         <Text style={styles.spotName}>{item.name}</Text>
         <Text style={styles.spotAddress} numberOfLines={1}>{item.address}</Text>
@@ -123,6 +129,11 @@ const styles = StyleSheet.create({
     shadowRadius: 1.41,
   },
   cardImage: { width: 80, height: 80, borderRadius: 8 },
+  cardImagePlaceholder: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#eee',
+  },
   cardContent: { flex: 1, marginLeft: 12, justifyContent: 'center' },
   spotName: { fontSize: 18, fontWeight: 'bold' },
   spotAddress: { fontSize: 12, color: 'gray' },

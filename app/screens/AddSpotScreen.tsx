@@ -17,9 +17,12 @@ import { requestMediaPermission, requestCameraPermission } from '../../src/utils
 import { uploadVideoToBunny } from '../../src/services/bunnyStreamService';
 
 const VIDEO_LIMITS = {
-  maxDurationSeconds: 20,
-  maxSizeMB: 60,
-  compressionThresholdMB: 20,
+  maxDurationSeconds: 60,
+  // ~HD (720p) 1 min ≈ 40–80 MB dependiendo del bitrate.
+  // Dejamos un margen razonable sin acercarnos al límite de 500 MB del backend.
+  maxSizeMB: 80,
+  // A partir de aquí intentamos comprimir para aligerar la subida.
+  compressionThresholdMB: 40,
 } as const;
 
 const BYTES_PER_MB = 1024 * 1024;
@@ -341,19 +344,22 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
       const uploadedGalleryUrls = await Promise.all(
         galleryImages.map(uri => uploadImageIfNeeded(uri, 'spot_gallery'))
       );
+      const cleanedGalleryUrls = uploadedGalleryUrls.filter(
+        (url): url is string => !!url,
+      );
 
-      const spotData: Partial<Spot> = {
+      const spotData: any = {
         name: spotName,
         address: spotAddress,
         description: spotDescription,
         flightStyles: flightStyles,
       };
 
-      if (finalSpotImageUrl) spotData.mainImage = finalSpotImageUrl;
-      if (finalVideoUrl) spotData.videoUrl = finalVideoUrl;
-      if (uploadedGalleryUrls.length > 0) spotData.galleryImages = uploadedGalleryUrls.filter((url): url is string => !!url);
-
       if (isEditing && spot) {
+        spotData.mainImage = finalSpotImageUrl ?? null;
+        spotData.videoUrl = finalVideoUrl ?? null;
+        spotData.galleryImages = cleanedGalleryUrls;
+
         await updateSpot(spot.id!, spotData);
         Alert.alert(t('alerts.success'), t('alerts.spotUpdated'));
       } else if (coordinate) {
@@ -362,7 +368,17 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
           // Si el spot original ya era una versión, usamos su parentId. Si no, usamos su propio id.
           spotData.parentId = originalSpot.parentId || originalSpot.id;
         }
-        
+
+        if (finalSpotImageUrl) {
+          spotData.mainImage = finalSpotImageUrl;
+        }
+        if (finalVideoUrl) {
+          spotData.videoUrl = finalVideoUrl;
+        }
+        if (cleanedGalleryUrls.length > 0) {
+          spotData.galleryImages = cleanedGalleryUrls;
+        }
+
         await addSpot({
           ...(spotData as any),
           latitude: coordinate.latitude,
@@ -462,6 +478,14 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
             <TouchableOpacity onPress={handleChooseSpotImage} style={styles.cameraIconSpot}>
               <Icon name="camera" size={20} color="#fff" />
             </TouchableOpacity>
+            {spotImage && (
+              <TouchableOpacity
+                onPress={() => setSpotImage(null)}
+                style={styles.removeMainImageButton}
+              >
+                <Text style={styles.removeMainImageButtonText}>{t('common.remove')}</Text>
+              </TouchableOpacity>
+            )}
           </TouchableOpacity>
         </View>
 
@@ -519,6 +543,14 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
               </>
             )}
           </TouchableOpacity>
+          {videoUri && !compressingVideo && (
+            <TouchableOpacity
+              style={styles.removeVideoButton}
+              onPress={() => setVideoUri(null)}
+            >
+              <Text style={styles.removeVideoButtonText}>{t('common.remove')}</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         <Text style={styles.label}>{t('addSpot.addressPlaceholder')}</Text>
@@ -634,6 +666,20 @@ const styles = StyleSheet.create({
     fontSize: 16,
     marginTop: 8,
   },
+  removeMainImageButton: {
+    position: 'absolute',
+    bottom: 12,
+    right: 12,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  removeMainImageButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
   cameraIconSpot: {
     position: 'absolute',
     top: 12,
@@ -651,6 +697,19 @@ const styles = StyleSheet.create({
   removeButton: { position: 'absolute', top: 5, right: 5, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 10, width: 20, height: 20, justifyContent: 'center', alignItems: 'center' },
   removeButtonText: { color: 'white', fontWeight: 'bold', fontSize: 12 },
   videoText: { marginTop: 10, fontStyle: 'italic', textAlign: 'center' },
+  removeVideoButton: {
+    marginTop: 8,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: '#f44336',
+    borderRadius: 16,
+  },
+  removeVideoButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
   tipsLinkContainer: { alignSelf: 'stretch', marginBottom: 4 },
   tipsLinkText: { color: '#007BFF', textDecorationLine: 'underline', fontSize: 15, textAlign: 'left', flex: 1 },
   tipsModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: 24 },

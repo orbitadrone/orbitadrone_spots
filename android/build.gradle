@@ -1,10 +1,10 @@
 buildscript {
     ext {
-        buildToolsVersion = "35.0.0"
+        buildToolsVersion = "36.0.0"
         minSdkVersion = 24
-        compileSdkVersion = 35
-        targetSdkVersion = 35
-        ndkVersion = "26.1.10909125"
+        compileSdkVersion = 36
+        targetSdkVersion = 36
+        ndkVersion = "27.1.12297006"
         kotlinVersion = "1.9.24"
     }
     repositories {
@@ -12,7 +12,7 @@ buildscript {
         mavenCentral()
     }
     dependencies {
-        classpath("com.android.tools.build:gradle:8.6.0")
+        classpath("com.android.tools.build:gradle:8.12.0")
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.24")
         classpath("com.facebook.react:react-native-gradle-plugin")
         classpath("com.google.gms:google-services:4.4.1")
@@ -21,4 +21,39 @@ buildscript {
 
 plugins {
     id "com.facebook.react.rootproject"
+}
+
+// Ensure all Kotlin compilation targets JDK 17 across subprojects
+subprojects { sp ->
+    // Configure Kotlin compile options early without afterEvaluate to avoid evaluation errors
+    tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+        kotlinOptions {
+            jvmTarget = "17"
+            freeCompilerArgs += ["-Xjvm-default=all"]
+        }
+    }
+}
+
+// Workaround: Only disable WebView codegen when NOT using the New Architecture.
+// When newArchEnabled=false, react-native-webview's codegen isn't needed and may
+// fail on older toolchains, so we disable it. With newArchEnabled=true, we must
+// keep codegen enabled so that the native jni targets (e.g. react_codegen_RNCWebViewSpec)
+// and their CMake projects are generated correctly.
+subprojects { sp ->
+    if (sp.name == 'react-native-webview') {
+        // Read the global newArchEnabled flag from the root project / gradle.properties
+        def isNewArchEnabled = rootProject.hasProperty("newArchEnabled") &&
+                rootProject.newArchEnabled?.toString() == "true"
+
+        if (!isNewArchEnabled) {
+            sp.afterEvaluate {
+                sp.tasks.matching {
+                    it.name == 'generateCodegenArtifactsFromSchema' ||
+                    it.name == 'generateCodegenSchemaFromJavaScript'
+                }.configureEach { task ->
+                    task.enabled = false
+                }
+            }
+        }
+    }
 }

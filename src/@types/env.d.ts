@@ -16,7 +16,5 @@ declare module '@env' {
   export const PURCHASES_API_KEY_ANDROID: string | undefined;
   export const PURCHASES_API_KEY_IOS: string | undefined;
   export const BUNNY_LIBRARY_ID: string | undefined;
-  export const BUNNY_STREAM_API_KEY: string | undefined;
-  export const BUNNY_ACCOUNT_API_KEY: string | undefined;
   export const BUNNY_CDN_HOST: string | undefined;
 }
