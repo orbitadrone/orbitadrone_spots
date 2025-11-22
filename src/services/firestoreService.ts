@@ -112,7 +112,34 @@ export interface UserProfile {
   profilePictureUrl?: string;
   backgroundPictureUrl?: string;
   flightStyles?: string[];
+  pilotMarker?: {
+    latitude: number;
+    longitude: number;
+    iconType: 'avatar' | 'color';
+    iconValue?: string;
+  };
+  showPilotMarker?: boolean;
 }
+
+export interface PilotMarkerMapEntry {
+  id: string;
+  latitude: number;
+  longitude: number;
+  photoUrl?: string | null;
+  displayName?: string | null;
+  cityRegion?: string | null;
+}
+
+const ensureCurrentUserIs = (userId: string) => {
+  const currentUser = auth.currentUser;
+  if (!currentUser) {
+    throw new Error('Usuario no autenticado');
+  }
+  if (currentUser.uid !== userId) {
+    throw new Error('No autorizado');
+  }
+  return currentUser;
+};
 
 // --- Funciones del Servicio ---
 
@@ -303,11 +330,96 @@ export const deleteSpot = async (spotId: string) => {
 };
 
 export const deleteUserAccount = async (userId: string) => {
-    const user = auth.currentUser;
-    if (!user) {
-        throw new Error("Usuario no autenticado.");
-    }
+    const user = ensureCurrentUserIs(userId);
     const userDocRef = doc(db, 'users', userId);
     await wrapFirestoreWrite('deleteUserAccountDoc', () => deleteDoc(userDocRef));
     return user.delete();
+};
+
+export type PilotMarkerPayload = {
+  latitude: number;
+  longitude: number;
+};
+
+const buildPilotMarkerDocument = (payload: PilotMarkerPayload) => ({
+  latitude: payload.latitude,
+  longitude: payload.longitude,
+  iconType: 'avatar',
+  iconValue: null,
+});
+
+export const setPilotMarker = (userId: string, payload: PilotMarkerPayload) => {
+  ensureCurrentUserIs(userId);
+  const userDoc = doc(db, 'users', userId);
+  return wrapFirestoreWrite('setPilotMarker', () =>
+    setDoc(
+      userDoc,
+      {
+        pilotMarker: buildPilotMarkerDocument(payload),
+        showPilotMarker: true,
+      },
+      {merge: true},
+    ),
+  );
+};
+
+export const setPilotMarkerVisibility = (userId: string, visible: boolean) => {
+  ensureCurrentUserIs(userId);
+  const userDoc = doc(db, 'users', userId);
+  return wrapFirestoreWrite('setPilotMarkerVisibility', () =>
+    setDoc(
+      userDoc,
+      {
+        showPilotMarker: visible,
+      },
+      {merge: true},
+    ),
+  );
+};
+
+export const clearPilotMarker = (userId: string) => {
+  ensureCurrentUserIs(userId);
+  const userDoc = doc(db, 'users', userId);
+  return wrapFirestoreWrite('clearPilotMarker', () =>
+    setDoc(
+      userDoc,
+      {
+        pilotMarker: null,
+        showPilotMarker: false,
+      },
+      {merge: true},
+    ),
+  );
+};
+
+export const getPublicPilotMarkers = async (): Promise<PilotMarkerMapEntry[]> => {
+  const usersCollectionRef = collection(db, 'users');
+  const visibilityQuery = query(
+    usersCollectionRef,
+    where('showPilotMarker', '==', true),
+  );
+  const snapshot = await runResilientFirestoreRead('getPublicPilotMarkers', () =>
+    getDocs(visibilityQuery),
+  );
+  return snapshot.docs
+    .map(docSnapshot => {
+      const data = docSnapshot.data() as UserProfile;
+      const marker = data.pilotMarker;
+      if (
+        marker &&
+        typeof marker.latitude === 'number' &&
+        typeof marker.longitude === 'number'
+      ) {
+        return {
+          id: docSnapshot.id,
+          latitude: marker.latitude,
+          longitude: marker.longitude,
+          photoUrl: data.profilePictureUrl ?? null,
+          displayName: data.displayName ?? null,
+          cityRegion: data.cityRegion ?? null,
+        } as PilotMarkerMapEntry;
+      }
+      return null;
+    })
+    .filter((entry): entry is PilotMarkerMapEntry => Boolean(entry));
 };

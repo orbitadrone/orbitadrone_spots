@@ -12,6 +12,8 @@ const ANDROID_READ_MEDIA_IMAGES =
 const ANDROID_READ_MEDIA_VIDEO =
   PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO ?? 'android.permission.READ_MEDIA_VIDEO';
 const ANDROID_RECORD_AUDIO = PermissionsAndroid.PERMISSIONS.RECORD_AUDIO;
+const ANDROID_POST_NOTIFICATIONS =
+  PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS ?? 'android.permission.POST_NOTIFICATIONS';
 
 const requestAndroidPermissions = async (permissions: string[]) => {
   const uniquePermissions = Array.from(new Set(permissions.filter(Boolean)));
@@ -70,6 +72,7 @@ export const requestEssentialPermissions = async () => {
       Platform.Version >= 33 ? null : ANDROID_WRITE_EXTERNAL,
       ANDROID_ACCESS_MEDIA_LOCATION,
       ANDROID_RECORD_AUDIO,
+      Platform.Version >= 33 ? ANDROID_POST_NOTIFICATIONS : null,
     ].filter(Boolean) as string[]);
   } else {
     Geolocation.requestAuthorization('whenInUse');

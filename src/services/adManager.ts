@@ -83,11 +83,31 @@ const showInterstitialAd = (
     return;
   }
 
+  // Asegurarnos de que siempre llamamos al callback,
+  // incluso si el anuncio falla al cargar o mostrar.
+  let hasCompleted = false;
+  const complete = () => {
+    if (hasCompleted) {
+      return;
+    }
+    hasCompleted = true;
+    onAdClosed?.();
+  };
+
   // Listener de un solo uso para cuando el anuncio se haya cerrado
   const closedListener = interstitial.addAdEventListener(AdEventType.CLOSED, () => {
     console.log('AdManager: Interstitial ad closed.');
-    onAdClosed?.();
+    complete();
     closedListener(); // Limpiar el listener
+    errorListener(); // Limpiar el listener de error asociado a esta llamada
+  });
+
+  // Listener de un solo uso para cuando el anuncio falle
+  const errorListener = interstitial.addAdEventListener(AdEventType.ERROR, (error) => {
+    console.warn('AdManager: Interstitial ad failed to show', error);
+    complete();
+    closedListener(); // Limpiar el listener de cerrado asociado a esta llamada
+    errorListener(); // Limpiar este listener
   });
 
   if (isInterstitialLoaded) {

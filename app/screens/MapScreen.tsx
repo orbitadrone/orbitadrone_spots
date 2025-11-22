@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { StyleSheet, View, Text, TouchableOpacity, Modal, TextInput, ActivityIndicator, Alert, Image, ScrollView, Button, FlatList } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE, MapPressEvent, Region, MapType } from 'react-native-maps';
 import MemoizedMapView from '../components/MemoizedMapView';
@@ -6,7 +6,15 @@ import { useNavigation } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
 import { Rating } from 'react-native-ratings';
 import { useMap } from '../context/MapContext';
-import { getSpots, Spot, getSpotWithVersions } from '../../src/services/firestoreService';
+import {
+  getSpots,
+  Spot,
+  getSpotWithVersions,
+  getPublicPilotMarkers,
+  PilotMarkerMapEntry,
+  getUserProfile,
+  UserProfile,
+} from '../../src/services/firestoreService';
 import { navigateToSpotAfterAd } from '../../src/utils/spotsNavigation';
 import CustomButton from '../components/CustomButton';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -16,7 +24,7 @@ import CheckBox from '@react-native-community/checkbox';
 import { adManager } from '../../src/services/adManager';
 import RemoveAdsModal from '../components/RemoveAdsModal';
 import { useAds } from '../context/AdContext';
-
+import { useAuthContext } from '../context/AuthContext';
 
 import { flightStylesOptions } from '../../src/constants/flightStyles';
 import { requestLocationPermission } from '../../src/utils/permissions';
@@ -56,12 +64,18 @@ export default function MapScreen() {
   const [showSpotsOnZoom, setShowSpotsOnZoom] = useState(true); // Nuevo estado para controlar la visibilidad de los spots por zoom
   
   const [selectedSpot, setSelectedSpot] = useState<any>(null);
+  const { user } = useAuthContext();
+  const [pilotProfile, setPilotProfile] = useState<UserProfile | null>(null);
+  const [isPilotProfileLoading, setPilotProfileLoading] = useState(true);
+  const [pilotMarkers, setPilotMarkers] = useState<PilotMarkerMapEntry[]>([]);
+  const [showMapInstructions, setShowMapInstructions] = useState(true);
 
   // --- Estados para el buscador y filtro ---
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedStyles, setSelectedStyles] = useState<string[]>([]);
   const [isFilterModalVisible, setFilterModalVisible] = useState(false);
   const [displaySpots, setDisplaySpots] = useState<Spot[]>([]);
+  const [displayPilots, setDisplayPilots] = useState<PilotMarkerMapEntry[]>([]);
   const [isRemoveAdsModalVisible, setRemoveAdsModalVisible] = useState(false);
   // --- Fin de estados para el buscador ---
 
@@ -115,44 +129,69 @@ export default function MapScreen() {
 
   // --- Lógica de filtrado ---
   useEffect(() => {
-    // Si no hay filtros activos, mostrar todos los spots
-    if (searchQuery.trim() === '' && selectedStyles.length === 0) {
-      setDisplaySpots(spots);
-      console.log('MapScreen: displaySpots length', spots.length, '(no filters)');
-      return;
-    }
-
     let spotsResult = [...spots];
-
-    // 1. Filtrar por texto de búsqueda
-    if (searchQuery.trim() !== '') {
+    const hasSearch = searchQuery.trim() !== '';
+    if (hasSearch) {
       const lowercasedQuery = searchQuery.toLowerCase();
-      spotsResult = spotsResult.filter(spot => 
-        spot.name.toLowerCase().includes(lowercasedQuery) ||
-        (spot.address && spot.address.toLowerCase().includes(lowercasedQuery)) ||
-        spot.description.toLowerCase().includes(lowercasedQuery)
+      spotsResult = spotsResult.filter(
+        spot =>
+          spot.name.toLowerCase().includes(lowercasedQuery) ||
+          (spot.address && spot.address.toLowerCase().includes(lowercasedQuery)) ||
+          spot.description.toLowerCase().includes(lowercasedQuery),
       );
     }
 
-    // 2. Filtrar por estilos de vuelo
     if (selectedStyles.length > 0) {
-      spotsResult = spotsResult.filter(spot => 
-        spot.flightStyles && spot.flightStyles.some(style => selectedStyles.includes(style))
+      spotsResult = spotsResult.filter(
+        spot =>
+          spot.flightStyles && spot.flightStyles.some(style => selectedStyles.includes(style)),
       );
     }
+    setDisplaySpots(
+      hasSearch || selectedStyles.length > 0 ? spotsResult : spots,
+    );
 
-    setDisplaySpots(spotsResult);
-    console.log('MapScreen: displaySpots length', spotsResult.length);
-  }, [searchQuery, selectedStyles, spots]);
+    if (hasSearch) {
+      const lowercasedQuery = searchQuery.toLowerCase();
+      const pilotMatches = pilotMarkersForMap.filter(marker => {
+        const nameMatch = marker.displayName?.toLowerCase().includes(lowercasedQuery);
+        const regionMatch = marker.cityRegion?.toLowerCase().includes(lowercasedQuery);
+        return Boolean(nameMatch || regionMatch);
+      });
+      setDisplayPilots(pilotMatches);
+    } else {
+      setDisplayPilots([]);
+    }
+  }, [searchQuery, selectedStyles, spots, pilotMarkersForMap]);
   // --- Fin de la lógica de filtrado ---
 
   useEffect(() => {
-    const unsubscribe = navigation.addListener('focus', () => {
-      fetchSpots();
-    });
-
-    return unsubscribe;
-  }, [navigation, fetchSpots]);
+    if (!user) {
+      setPilotProfile(null);
+      setPilotProfileLoading(false);
+      return;
+    }
+    let cancelled = false;
+    const loadProfile = async () => {
+      try {
+        setPilotProfileLoading(true);
+        const data = await getUserProfile(user.uid);
+        if (!cancelled) {
+          setPilotProfile(data);
+        }
+      } catch (error) {
+        console.error('[MapScreen] failed to fetch user profile', error);
+      } finally {
+        if (!cancelled) {
+          setPilotProfileLoading(false);
+        }
+      }
+    };
+    loadProfile();
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
 
   const onRegionChangeComplete = (newRegion: Region) => {
     if (isAnimatingMap.current) {
@@ -162,9 +201,8 @@ export default function MapScreen() {
       setRegion(newRegion);
     }
     // Aproximadamente 1 grado de latitud = 111 km
-    // Queremos mostrar marcadores si estamos a menos de 50 km de altura
-    // Esto significa que latitudeDelta debe ser menor que 50km / 111km/grado = ~0.45 grados
-    const zoomThreshold = 0.45; // Ajusta este valor según sea necesario para 50km
+    // Queremos mostrar marcadores si estamos a menos de ~28 km de altura (delta < 0.25)
+    const zoomThreshold = 0.25;
     if (newRegion.latitudeDelta < zoomThreshold) {
       if (!showSpotsOnZoom) {
         console.log('MapScreen: enabling markers, delta', newRegion.latitudeDelta);
@@ -211,9 +249,88 @@ export default function MapScreen() {
     }
   }, [t]);
 
+  const fetchPilotMarkers = useCallback(async () => {
+    try {
+      const markers = await getPublicPilotMarkers();
+      setPilotMarkers(markers);
+    } catch (error) {
+      console.error('[MapScreen] failed to fetch pilot markers', error);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchSpots();
+    const unsubscribe = navigation.addListener('focus', () => {
+      fetchSpots();
+    });
+    return unsubscribe;
+  }, [navigation, fetchSpots]);
+
+  useEffect(() => {
+    fetchPilotMarkers();
+    const unsubscribe = navigation.addListener('focus', fetchPilotMarkers);
+    return unsubscribe;
+  }, [navigation, fetchPilotMarkers]);
 
 
-const handleCalloutPress = (spotId: string) => {
+
+  const isValidPilotMarker = (marker?: { latitude?: number; longitude?: number }) =>
+    Boolean(
+      marker &&
+        typeof marker.latitude === 'number' &&
+        typeof marker.longitude === 'number',
+    );
+
+  const pilotMarker = pilotProfile?.pilotMarker;
+  const pilotMarkerData =
+    isValidPilotMarker(pilotMarker) && pilotProfile?.showPilotMarker !== false
+      ? {
+          latitude: pilotMarker.latitude,
+          longitude: pilotMarker.longitude,
+          photoUrl: pilotProfile?.profilePictureUrl,
+        }
+      : null;
+  const pilotMarkersForMap = useMemo(() => {
+    if (!pilotMarkerData || !user?.uid) {
+      return pilotMarkers;
+    }
+    const existingIndex = pilotMarkers.findIndex(
+      marker => marker.id === user.uid,
+    );
+    if (existingIndex !== -1) {
+      const updated = [...pilotMarkers];
+      updated[existingIndex] = {
+        ...updated[existingIndex],
+        latitude: pilotMarkerData.latitude,
+        longitude: pilotMarkerData.longitude,
+        photoUrl:
+          pilotMarkerData.photoUrl ?? updated[existingIndex].photoUrl ?? null,
+      };
+      return updated;
+    }
+    return [
+      ...pilotMarkers,
+      {
+        id: user.uid,
+        latitude: pilotMarkerData.latitude,
+        longitude: pilotMarkerData.longitude,
+        photoUrl: pilotMarkerData.photoUrl ?? null,
+      },
+    ];
+  }, [pilotMarkers, pilotMarkerData, user?.uid]);
+  const searchResults = useMemo<SearchResult[]>(() => {
+    const pilotEntries = displayPilots.map(pilot => ({
+      type: 'pilot' as const,
+      pilot,
+    }));
+    const spotEntries = displaySpots.map(spot => ({
+      type: 'spot' as const,
+      spot,
+    }));
+    return [...pilotEntries, ...spotEntries];
+  }, [displayPilots, displaySpots]);
+
+  const handleCalloutPress = (spotId: string) => {
   setSelectedSpot(null);
   adManager.showInterstitialAd(() => {
     navigateToSpotAfterAd({
@@ -260,6 +377,32 @@ const handleCalloutPress = (spotId: string) => {
     setSelectedStyles([]);
   };
 
+  const handlePilotMarkerPress = useCallback(
+    (markerUserId?: string) => {
+      if (!markerUserId) {
+        return;
+      }
+      navigation.navigate('UserProfile' as never, {userId: markerUserId} as never);
+    },
+    [navigation],
+  );
+  const handlePilotResultPress = useCallback(
+    (pilot: PilotMarkerMapEntry) => {
+      const pilotRegion = {
+        latitude: pilot.latitude,
+        longitude: pilot.longitude,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      };
+      mapRef.current?.animateToRegion(pilotRegion, 1000);
+      setRegion(pilotRegion);
+      setSearchQuery('');
+      setSelectedStyles([]);
+      handlePilotMarkerPress(pilot.id);
+    },
+    [handlePilotMarkerPress, setRegion],
+  );
+
   return (
     <View style={styles.container}>
       {console.log('MapScreen render', {showSpotsOnZoom, displayLength: displaySpots.length, region})}
@@ -302,6 +445,9 @@ const handleCalloutPress = (spotId: string) => {
           showAirZones={false}
           airZones={null}
           handleSpotPress={(spot, event) => handleSpotPress(spot, event)}
+          pilotMarkers={pilotMarkersForMap}
+          handlePilotMarkerPress={handlePilotMarkerPress}
+          showMarkers={showSpotsOnZoom}
         />
       )}
 
@@ -331,6 +477,28 @@ const handleCalloutPress = (spotId: string) => {
           </TouchableOpacity>
         </View>
       </View>
+
+      {showMapInstructions && (
+        <View style={styles.instructionsCard}>
+          <Text style={styles.instructionsTitle}>{t('map.instructionsTitle')}</Text>
+          <View style={styles.instructionsList}>
+            <Text style={styles.instructionsItem}>• {t('map.instructionsSearchSpot')}</Text>
+            <Text style={styles.instructionsItem}>• {t('map.instructionsTapSpot')}</Text>
+            <Text style={styles.instructionsItem}>• {t('map.instructionsAddSpot')}</Text>
+          </View>
+          <TouchableOpacity
+            style={styles.instructionsDismiss}
+            onPress={() => setShowMapInstructions(false)}>
+            <Text style={styles.instructionsDismissText}>{t('map.instructionsDismiss')}</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+      {isPilotProfileLoading && (
+        <View style={styles.pilotLoadingCard}>
+          <ActivityIndicator size="small" color="#007bff" />
+          <Text style={styles.pilotLoadingText}>{t('map.loadingPilotMarker')}</Text>
+        </View>
+      )}
 
       {selectedSpot && (
         <View style={styles.calloutContainer}>
@@ -437,28 +605,64 @@ const handleCalloutPress = (spotId: string) => {
             <Icon name="close" size={24} color="#fff" />
           </TouchableOpacity>
           <FlatList
-            data={displaySpots}
-            keyExtractor={item => item.id!}
-            renderItem={({ item }) => (
-              <TouchableOpacity style={styles.resultItem} onPress={() => handleGoToSpot(item)}>
-                <Image source={{ uri: item.mainImage }} style={styles.resultImage} />
-                <View style={styles.resultTextContainer}>
-                  <Text style={styles.resultName}>{item.name}</Text>
-                  <Text style={styles.resultAddress} numberOfLines={1}>{item.address}</Text>
-                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                    <Rating
-                      type="star"
-                      ratingCount={5}
-                      imageSize={15}
-                      readonly
-                      startingValue={item.averageRating}
-                      style={{ paddingVertical: 2 }}
-                    />
-                    <Text style={{ marginLeft: 5, color: 'gray' }}>({item.reviewCount})</Text>
+            data={searchResults}
+            keyExtractor={item =>
+              item.type === 'pilot' ? `pilot-${item.pilot.id}` : `spot-${item.spot.id}`
+            }
+            renderItem={({item}) => {
+              if (item.type === 'pilot') {
+                return (
+                  <TouchableOpacity
+                    style={styles.resultItem}
+                    onPress={() => handlePilotResultPress(item.pilot)}>
+                    {item.pilot.photoUrl ? (
+                      <Image
+                        source={{uri: item.pilot.photoUrl}}
+                        style={styles.resultImage}
+                      />
+                    ) : (
+                      <View style={[styles.resultImage, styles.pilotFallback]}>
+                        <Icon name="account" size={22} color="#fff" />
+                      </View>
+                    )}
+                    <View style={styles.resultTextContainer}>
+                      <Text style={styles.resultName}>
+                        {item.pilot.displayName || t('map.unknownPilot')}
+                      </Text>
+                      {item.pilot.cityRegion ? (
+                        <Text style={styles.resultAddress} numberOfLines={1}>
+                          {item.pilot.cityRegion}
+                        </Text>
+                      ) : null}
+                      <Text style={styles.resultPilotBadge}>{t('map.pilotResult')}</Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              }
+              const spotItem = item.spot;
+              return (
+                <TouchableOpacity style={styles.resultItem} onPress={() => handleGoToSpot(spotItem)}>
+                  <Image source={{uri: spotItem.mainImage}} style={styles.resultImage} />
+                  <View style={styles.resultTextContainer}>
+                    <Text style={styles.resultName}>{spotItem.name}</Text>
+                    <Text style={styles.resultAddress} numberOfLines={1}>
+                      {spotItem.address}
+                    </Text>
+                    <View style={{flexDirection: 'row', alignItems: 'center'}}>
+                      <Rating
+                        type="star"
+                        ratingCount={5}
+                        imageSize={15}
+                        readonly
+                        startingValue={spotItem.averageRating}
+                        style={{paddingVertical: 2}}
+                      />
+                      <Text style={{marginLeft: 5, color: 'gray'}}>({spotItem.reviewCount})</Text>
+                    </View>
                   </View>
-                </View>
-              </TouchableOpacity>
-            )}
+                </TouchableOpacity>
+              );
+            }}
             ListEmptyComponent={<Text style={styles.noResultsText}>{t('map.noResults')}</Text>}
           />
         </View>
@@ -485,6 +689,57 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     zIndex: 1,
     gap: 10,
+  },
+  instructionsCard: {
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    padding: 12,
+    marginHorizontal: 16,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  instructionsTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 6,
+  },
+  instructionsList: {
+    marginBottom: 8,
+  },
+  instructionsItem: {
+    fontSize: 13,
+    color: '#555',
+    marginBottom: 4,
+  },
+  instructionsDismiss: {
+    alignSelf: 'flex-end',
+    paddingVertical: 4,
+    paddingHorizontal: 6,
+  },
+  instructionsDismissText: {
+    color: '#1a73e8',
+    fontWeight: '600',
+  },
+  pilotLoadingCard: {
+    position: 'absolute',
+    top: 180,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  pilotLoadingText: {
+    marginLeft: 8,
+    color: '#fff',
+    fontSize: 13,
   },
   searchContainer: {
     flex: 1,
@@ -751,6 +1006,11 @@ const styles = StyleSheet.create({
     height: 60,
     borderRadius: 8,
   },
+  pilotFallback: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#007bff',
+  },
   resultTextContainer: {
     flex: 1,
     marginLeft: 15,
@@ -764,9 +1024,18 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: 'gray',
   },
+  resultPilotBadge: {
+    marginTop: 4,
+    fontSize: 12,
+    color: '#007bff',
+    fontWeight: '600',
+  },
   noResultsText: {
     textAlign: 'center',
     marginTop: 20,
     color: 'gray',
   },
 });
+type SearchResult =
+  | {type: 'pilot'; pilot: PilotMarkerMapEntry}
+  | {type: 'spot'; spot: Spot};

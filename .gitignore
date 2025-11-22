@@ -4,6 +4,10 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
+*.log
+app_log.txt
+fatal_exceptions_with_stack.txt
+rules_version='2';.txt
 
 # React Native
 node_modules/
@@ -20,6 +24,7 @@ metro-cache/
 android/app/build/
 android/app/.cxx/
 ios/build/
+android/android/
 
 # Fastlane
 ios/fastlane/report.xml
@@ -50,12 +55,18 @@ local.properties
 .DS_Store
 .idea/
 .vscode/
+.firebaserc
+firebase.json
 
 # Signing artifacts
 *.keystore
 *.jks
 android/keystores/
 keystore.properties
+*.pem
+upload_cert.pem
+android/app/google-services.json
+ios/GoogleService-Info.plist
 
 # Build artifacts
 android/build/

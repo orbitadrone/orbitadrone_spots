@@ -1,6 +1,6 @@
 import React, { memo } from 'react';
 import MapView, { Marker, PROVIDER_GOOGLE, MapPressEvent, Region, MapType } from 'react-native-maps';
-import { StyleSheet } from 'react-native';
+import { StyleSheet, View, Image } from 'react-native';
 import SpotMarker from './SpotMarker';
 import MemoizedGeojson from './MemoizedGeojson';
 
@@ -17,6 +17,14 @@ interface MemoizedMapViewProps {
   showAirZones: boolean;
   airZones: any;
   handleSpotPress: (spot: any) => void;
+  showMarkers: boolean;
+  handlePilotMarkerPress?: (userId: string) => void;
+  pilotMarkers?: Array<{
+    id: string;
+    latitude: number;
+    longitude: number;
+    photoUrl?: string | null;
+  }>;
 }
 
 const MemoizedMapView = memo((
@@ -32,7 +40,10 @@ const MemoizedMapView = memo((
     spots,
     showAirZones,
     airZones,
-    handleSpotPress
+    handleSpotPress,
+    showMarkers,
+    pilotMarkers,
+    handlePilotMarkerPress,
   }: MemoizedMapViewProps
 ) => {
   return (
@@ -48,9 +59,10 @@ const MemoizedMapView = memo((
       mapType={mapType}
     >
       {selectedCoordinate && <Marker coordinate={selectedCoordinate} pinColor="green" />}
-      {spots.map((spot: any) => (
-        <SpotMarker key={spot.id} spot={spot} handleSpotPress={handleSpotPress} />
-      ))}
+      {showMarkers &&
+        spots.map((spot: any) => (
+          <SpotMarker key={spot.id} spot={spot} handleSpotPress={handleSpotPress} />
+        ))}
       {showAirZones && airZones && (
         <MemoizedGeojson
           geojson={airZones}
@@ -59,6 +71,25 @@ const MemoizedMapView = memo((
           strokeWidth={2}
         />
       )}
+      {showMarkers &&
+        pilotMarkers?.map(marker => (
+          <Marker
+            key={marker.id}
+            coordinate={{
+              latitude: marker.latitude,
+              longitude: marker.longitude,
+            }}
+            anchor={{x: 0.5, y: 0.5}}
+            onPress={() => handlePilotMarkerPress?.(marker.id)}>
+            <View style={styles.pilotMarkerWrapper}>
+              {marker.photoUrl ? (
+                <Image source={{uri: marker.photoUrl}} style={styles.pilotMarkerImage} />
+              ) : (
+                <View style={styles.pilotMarkerFallback} />
+              )}
+            </View>
+          </Marker>
+        ))}
     </MapView>
   );
 });
@@ -66,6 +97,24 @@ const MemoizedMapView = memo((
 const styles = StyleSheet.create({
   map: {
     flex: 1,
+  },
+  pilotMarkerWrapper: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    overflow: 'hidden',
+    borderWidth: 2,
+    borderColor: '#fff',
+    backgroundColor: '#fff',
+    elevation: 4,
+  },
+  pilotMarkerImage: {
+    width: '100%',
+    height: '100%',
+  },
+  pilotMarkerFallback: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#007bff',
   },
 });
 

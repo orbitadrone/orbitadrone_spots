@@ -32,6 +32,8 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
   // Estado unificado para el modal de video
   const [videoModalVisible, setVideoModalVisible] = useState(false);
   const [currentVideoInfo, setCurrentVideoInfo] = useState<{ url: string; type: 'native' | 'bunny'; guid?: string } | null>(null);
+  const [imageModalVisible, setImageModalVisible] = useState(false);
+  const [currentImageUrl, setCurrentImageUrl] = useState<string | null>(null);
   const spotReportOptions = useMemo(
     () => [
       { key: 'photo', label: t('reportReasons.photo') },
@@ -57,6 +59,16 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
   const [reviewReportTarget, setReviewReportTarget] = useState<Review | null>(null);
   const [reviewReportReasons, setReviewReportReasons] = useState<Record<string, boolean>>({});
   const [reviewReportNotes, setReviewReportNotes] = useState('');
+
+  const openImageModal = useCallback((url: string) => {
+    setCurrentImageUrl(url);
+    setImageModalVisible(true);
+  }, []);
+
+  const closeImageModal = useCallback(() => {
+    setImageModalVisible(false);
+    setCurrentImageUrl(null);
+  }, []);
 
   const openSpotReportModal = useCallback(() => {
     setSpotReportReasons(createReasonState(spotReportOptions));
@@ -484,7 +496,13 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
           <Text style={styles.sectionTitle}>{t('spotDetail.gallery')}</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             {spot.galleryImages.map((url, index) => (
-              <Image key={index} source={{ uri: url }} style={styles.galleryImage} />
+              <TouchableOpacity
+                key={index}
+                activeOpacity={0.8}
+                onPress={() => openImageModal(url)}
+              >
+                <Image source={{ uri: url }} style={styles.galleryImage} />
+              </TouchableOpacity>
             ))}
           </ScrollView>
         </View>
@@ -722,6 +740,29 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
       </Modal>
 
       <Modal
+        animationType="fade"
+        transparent
+        visible={imageModalVisible && !!currentImageUrl}
+        onRequestClose={closeImageModal}
+      >
+        <View style={styles.imageModalBackdrop}>
+          <TouchableOpacity
+            style={styles.imageModalBackdrop}
+            activeOpacity={1}
+            onPress={closeImageModal}
+          >
+            {currentImageUrl && (
+              <Image
+                source={{ uri: currentImageUrl }}
+                style={styles.fullscreenImage}
+                resizeMode="contain"
+              />
+            )}
+          </TouchableOpacity>
+        </View>
+      </Modal>
+
+      <Modal
         animationType="slide"
         transparent={false}
         visible={videoModalVisible && !!currentVideoInfo}
@@ -922,6 +963,16 @@ const styles = StyleSheet.create({
     height: 120,
     borderRadius: 8,
     marginRight: 10,
+  },
+  imageModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  fullscreenImage: {
+    width: '100%',
+    height: '100%',
   },
   videoThumbnail: {
     width: '100%',

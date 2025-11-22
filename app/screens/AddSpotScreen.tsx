@@ -571,7 +571,7 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
               <View key={style} style={styles.checkboxContainer}>
                 <CheckBox
                   value={flightStyles.includes(style)}
-                  onValue-Change={() => handleToggleStyle(style)}
+                  onValueChange={() => handleToggleStyle(style)}
                   tintColors={{ true: '#007BFF', false: '#ccc' }}
                 />
                 <Text 

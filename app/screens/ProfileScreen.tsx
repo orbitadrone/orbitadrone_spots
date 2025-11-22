@@ -1,8 +1,30 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, TextInput, Button, Alert, ActivityIndicator, ScrollView, Image, TouchableOpacity, ImageBackground, Modal, Pressable } from 'react-native';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TextInput,
+  Button,
+  Alert,
+  ActivityIndicator,
+  ScrollView,
+  Image,
+  TouchableOpacity,
+  ImageBackground,
+  Modal,
+  Pressable,
+} from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
-import { getUserProfile, saveUserProfile, deleteUserAccount, UserProfile } from '../../src/services/firestoreService';
+import {
+  getUserProfile,
+  saveUserProfile,
+  deleteUserAccount,
+  UserProfile,
+  setPilotMarker,
+  clearPilotMarker,
+  PilotMarkerPayload,
+} from '../../src/services/firestoreService';
 import { auth } from '../../src/firebaseConfig';
 import { uploadImage } from '../../src/services/storageService';
 import ImagePicker from 'react-native-image-crop-picker';
@@ -10,6 +32,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { sendPasswordResetEmail, signOut, EmailAuthProvider } from '@react-native-firebase/auth';
 import LanguageSelector from '../components/LanguageSelector';
 import Purchases from 'react-native-purchases';
+import Toast from 'react-native-toast-message';
 
 import { flightStylesOptions } from '../../src/constants/flightStyles';
 
@@ -17,6 +40,10 @@ import RemoveAdsModal from '../components/RemoveAdsModal';
 import { useAuthContext } from '../context/AuthContext';
 import { useAds } from '../context/AdContext';
 import { adManager } from '../../src/services/adManager';
+import MapView, { Marker, MapPressEvent, Region } from 'react-native-maps';
+import Geolocation from '@react-native-community/geolocation';
+import { requestLocationPermission } from '../../src/utils/permissions';
+import { geocode } from '../../src/utils/geocoding';
 
 const pilotTypeCanonicalMap: Record<string, string> = {
   piloto: 'pilot',
@@ -70,6 +97,13 @@ const normalizePilotTypes = (profile?: { pilotType?: string | string[] | null; p
   return Array.from(result);
 };
 
+const DEFAULT_MODAL_REGION: Region = {
+  latitude: 41.3851,
+  longitude: 2.1734,
+  latitudeDelta: 0.5,
+  longitudeDelta: 0.5,
+};
+
 const ProfileScreen = () => {
   const { t } = useTranslation();
   const navigation = useNavigation();
@@ -80,6 +114,12 @@ const ProfileScreen = () => {
   const [saving, setSaving] = useState(false);
   
   const [profile, setProfile] = useState<Partial<UserProfile>>({});
+  const [isPilotMarkerModalVisible, setPilotMarkerModalVisible] = useState(false);
+  const [pilotMarkerDraft, setPilotMarkerDraft] = useState<PilotMarkerPayload | null>(null);
+  const [pilotMarkerMapRegion, setPilotMarkerMapRegion] = useState<Region>(DEFAULT_MODAL_REGION);
+  const [pilotMarkerModalKey, setPilotMarkerModalKey] = useState(0);
+  const [pilotMarkerSaving, setPilotMarkerSaving] = useState(false);
+  const pilotMarkerMapRef = useRef<MapView | null>(null);
   
   const [isDeleteModalVisible, setDeleteModalVisible] = useState(false);
   const [isCancelSubscriptionModalVisible, setCancelSubscriptionModalVisible] = useState(false);
@@ -179,12 +219,12 @@ const ProfileScreen = () => {
     try {
       let profilePictureUrl = profile.profilePictureUrl;
       if (profilePictureUrl && !profilePictureUrl.startsWith('http')) {
-        profilePictureUrl = await uploadImage(profilePictureUrl, `profile_pictures/${user.uid}.jpg`);
+        profilePictureUrl = await uploadImage(profilePictureUrl, `profile_pictures/${user.uid}/profile.jpg`);
       }
 
       let backgroundPictureUrl = profile.backgroundPictureUrl;
       if (backgroundPictureUrl && !backgroundPictureUrl.startsWith('http')) {
-        backgroundPictureUrl = await uploadImage(backgroundPictureUrl, `background_pictures/${user.uid}.jpg`);
+        backgroundPictureUrl = await uploadImage(backgroundPictureUrl, `background_pictures/${user.uid}/background.jpg`);
       }
 
       const pilotTypes = normalizePilotTypes(profile);
@@ -295,6 +335,122 @@ const ProfileScreen = () => {
     setProfile(p => ({ ...p, socials: { ...p.socials, [platform]: value } }));
   };
 
+  const handleClearPilotMarker = async () => {
+    if (!user) return;
+    try {
+      await clearPilotMarker(user.uid);
+      setProfile(p => ({ ...p, pilotMarker: undefined }));
+    } catch (error) {
+      console.error('[Profile] clearPilotMarker failed', error);
+      Alert.alert(t('alerts.error'), t('alerts.error'));
+    }
+  };
+
+  const openPilotMarkerModal = () => {
+    const current = profile.pilotMarker;
+    const region = current
+      ? {
+          latitude: current.latitude,
+          longitude: current.longitude,
+          latitudeDelta: 0.1,
+          longitudeDelta: 0.1,
+        }
+      : DEFAULT_MODAL_REGION;
+    setPilotMarkerMapRegion(region);
+    setPilotMarkerModalKey(prev => prev + 1);
+    setPilotMarkerDraft({
+      latitude: region.latitude,
+      longitude: region.longitude,
+    });
+    setPilotMarkerModalVisible(true);
+  };
+
+  const closePilotMarkerModal = () => {
+    setPilotMarkerModalVisible(false);
+  };
+
+  const handleModalMapPress = (event: MapPressEvent) => {
+    const { latitude, longitude } = event.nativeEvent.coordinate;
+    setPilotMarkerDraft({ latitude, longitude });
+    pilotMarkerMapRef.current?.animateToRegion(
+      {
+        latitude,
+        longitude,
+        latitudeDelta: pilotMarkerMapRegion.latitudeDelta,
+        longitudeDelta: pilotMarkerMapRegion.longitudeDelta,
+      },
+      300,
+    );
+  };
+
+  const handleUseCurrentLocation = async () => {
+    if (!user) return;
+    const granted = await requestLocationPermission();
+    if (!granted) {
+      Alert.alert(t('alerts.locationPermissionDenied'), t('alerts.locationPermissionDeniedMessage'));
+      return;
+    }
+    Geolocation.getCurrentPosition(
+      position => {
+        const { latitude, longitude } = position.coords;
+        const newRegion = {
+          latitude,
+          longitude,
+          latitudeDelta: 0.05,
+          longitudeDelta: 0.05,
+        };
+        setPilotMarkerMapRegion(newRegion);
+        pilotMarkerMapRef.current?.animateToRegion(newRegion, 400);
+        setPilotMarkerDraft({ latitude, longitude });
+        setPilotMarkerModalKey(prev => prev + 1);
+      },
+      error => {
+        console.error('[Profile] current location failed', error);
+        Alert.alert(t('alerts.error'), t('alerts.locationError'));
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 1000 },
+    );
+  };
+
+  const handleSavePilotMarker = async () => {
+    if (!user) return;
+    if (!pilotMarkerDraft) {
+      Alert.alert(t('alerts.error'), t('profile.pilotMarkerNeedsLocation'));
+      return;
+    }
+    setPilotMarkerSaving(true);
+    let formattedAddress: string | null = null;
+    try {
+      const result = await geocode(pilotMarkerDraft.latitude, pilotMarkerDraft.longitude);
+      formattedAddress = result?.formatted_address ?? null;
+    } catch (error) {
+      console.warn('[Profile] geocode failed', error);
+    }
+    try {
+      await setPilotMarker(user.uid, pilotMarkerDraft);
+      setProfile(p => ({
+        ...p,
+        pilotMarker: pilotMarkerDraft,
+        cityRegion: formattedAddress ?? p.cityRegion,
+      }));
+      Toast.show({
+        type: 'success',
+        text1: t('profile.pilotMarkerSavedTitle'),
+        text2: t('profile.pilotMarkerSavedMessage'),
+      });
+      if (formattedAddress) {
+        await saveUserProfile(user.uid, { cityRegion: formattedAddress });
+      }
+      setPilotMarkerModalVisible(false);
+      await fetchProfile(user.uid);
+    } catch (error) {
+      console.error('[Profile] setPilotMarker failed', error);
+      Alert.alert(t('alerts.error'), t('alerts.error'));
+    } finally {
+      setPilotMarkerSaving(false);
+    }
+  };
+
   if (loading) return <View style={styles.loadingContainer}><ActivityIndicator size="large" /><Text>{t('common.loading')}</Text></View>;
   if (!user) return <View style={styles.container}><Text>{t('profile.notLoggedInProfile')}</Text></View>;
 
@@ -327,6 +483,35 @@ const ProfileScreen = () => {
         <TextInput style={styles.input} value={profile.displayName} onChangeText={text => setProfile(p => ({ ...p, displayName: text }))} placeholder={t('profile.displayNamePlaceholder')} />
         <Text style={styles.label}>{t('profile.cityRegionLabel')}</Text>
         <TextInput style={styles.input} value={profile.cityRegion} onChangeText={text => setProfile(p => ({ ...p, cityRegion: text }))} placeholder={t('profile.cityRegionPlaceholder')} />
+        <View style={styles.pilotMarkerSection}>
+          <Text style={styles.sectionHeading}>{t('profile.pilotMarkerSectionTitle')}</Text>
+          <Text style={styles.pilotMarkerInfo}>
+            {profile.pilotMarker
+              ? t('profile.pilotMarkerVisibleAt', {
+                  lat: profile.pilotMarker.latitude.toFixed(4),
+                  lng: profile.pilotMarker.longitude.toFixed(4),
+                })
+              : t('profile.pilotMarkerNotSet')}
+          </Text>
+          <View style={styles.pilotMarkerActionRow}>
+            <TouchableOpacity style={styles.pilotMarkerButton} onPress={openPilotMarkerModal}>
+              <Text style={styles.pilotMarkerButtonText}>
+                {profile.pilotMarker
+                  ? t('profile.pilotMarkerUpdateButton')
+                  : t('profile.pilotMarkerSetButton')}
+              </Text>
+            </TouchableOpacity>
+            {profile.pilotMarker && (
+              <TouchableOpacity
+                style={[styles.pilotMarkerButton, styles.pilotMarkerButtonDestructive]}
+                onPress={handleClearPilotMarker}>
+                <Text style={[styles.pilotMarkerButtonText, styles.pilotMarkerButtonDestructiveText]}>
+                  {t('profile.pilotMarkerClearButton')}
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
         <Text style={styles.label}>{t('profile.pilotTypeLabel')}</Text>
         <View style={styles.radioContainer}>
           {pilotTypeOptions.map(option => (
@@ -444,6 +629,53 @@ const ProfileScreen = () => {
           );
         }}
       />
+      <Modal
+        animationType="slide"
+        visible={isPilotMarkerModalVisible}
+        onRequestClose={closePilotMarkerModal}
+      >
+        <View style={styles.pilotMarkerModalContainer}>
+          <Text style={styles.modalTitle}>{t('profile.pilotMarkerModalTitle')}</Text>
+          <Text style={styles.pilotMarkerModalSubtitle}>{t('profile.pilotMarkerModalInstructions')}</Text>
+          <MapView
+            style={styles.pilotMarkerModalMap}
+            ref={pilotMarkerMapRef}
+            initialRegion={pilotMarkerMapRegion}
+            key={pilotMarkerModalKey}
+            onPress={handleModalMapPress}
+          >
+            {pilotMarkerDraft && (
+              <Marker
+                coordinate={{
+                  latitude: pilotMarkerDraft.latitude,
+                  longitude: pilotMarkerDraft.longitude,
+                }}
+              />
+            )}
+          </MapView>
+          <View style={styles.pilotMarkerModalControls}>
+            <TouchableOpacity style={styles.pilotMarkerLink} onPress={handleUseCurrentLocation}>
+              <Text style={styles.pilotMarkerLinkText}>{t('profile.pilotMarkerUseCurrentLocation')}</Text>
+            </TouchableOpacity>
+            <View style={styles.pilotMarkerModalActions}>
+              <TouchableOpacity style={styles.pilotMarkerModalButton} onPress={closePilotMarkerModal}>
+                <Text style={styles.pilotMarkerButtonText}>{t('profile.pilotMarkerCancelButton')}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.pilotMarkerModalButton, styles.pilotMarkerModalButtonPrimary]}
+                onPress={handleSavePilotMarker}
+                disabled={pilotMarkerSaving}
+              >
+                {pilotMarkerSaving ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.pilotMarkerButtonText}>{t('profile.pilotMarkerSaveButton')}</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
       <Modal animationType="slide" transparent={true} visible={isCancelSubscriptionModalVisible} onRequestClose={() => setCancelSubscriptionModalVisible(false)}>
         <View style={styles.centeredView}>
           <View style={styles.modalView}>
@@ -576,6 +808,85 @@ const styles = StyleSheet.create({
   buttonCancel: { backgroundColor: '#888' },
   buttonConfirm: { backgroundColor: 'red' },
   textStyle: { color: 'white', fontWeight: 'bold', textAlign: 'center' },
+  pilotMarkerSection: {
+    marginTop: 24,
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#eee',
+    backgroundColor: '#f9f9f9',
+  },
+  pilotMarkerInfo: {
+    marginTop: 8,
+    fontSize: 14,
+    color: '#333',
+  },
+  pilotMarkerActionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 12,
+  },
+  pilotMarkerButton: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: '#007bff',
+    alignItems: 'center',
+    marginRight: 8,
+  },
+  pilotMarkerButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  pilotMarkerButtonDestructive: {
+    backgroundColor: '#e53935',
+  },
+  pilotMarkerButtonDestructiveText: {
+    color: '#fff',
+  },
+  pilotMarkerModalContainer: {
+    flex: 1,
+    paddingTop: 60,
+    paddingHorizontal: 20,
+    backgroundColor: '#fff',
+  },
+  pilotMarkerModalSubtitle: {
+    fontSize: 14,
+    color: '#555',
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  pilotMarkerModalMap: {
+    height: 250,
+    borderRadius: 12,
+    marginBottom: 16,
+  },
+  pilotMarkerModalControls: {
+    flex: 1,
+  },
+  pilotMarkerLink: {
+    marginBottom: 12,
+  },
+  pilotMarkerLinkText: {
+    color: '#007bff',
+    fontWeight: '600',
+  },
+  pilotMarkerModalActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 16,
+  },
+  pilotMarkerModalButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 10,
+    backgroundColor: '#ccc',
+    alignItems: 'center',
+    marginRight: 8,
+  },
+  pilotMarkerModalButtonPrimary: {
+    backgroundColor: '#007bff',
+  },
 });
 
 export default ProfileScreen;

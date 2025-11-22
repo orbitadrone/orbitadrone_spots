@@ -1,8 +1,8 @@
 import React, {Suspense, useCallback, useEffect, useRef, useState} from 'react';
 import {Linking, Platform} from 'react-native';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import {SafeAreaProvider} from 'react-native-safe-area-context';
 import {I18nextProvider} from 'react-i18next';
-import mobileAds, {AppOpenAd, AdEventType} from 'react-native-google-mobile-ads';
+import mobileAds from 'react-native-google-mobile-ads';
 import Geocoder from 'react-native-geocoding';
 import Purchases from 'react-native-purchases';
 import Toast from 'react-native-toast-message';
@@ -12,16 +12,18 @@ import RootNavigator from './app/navigation/RootNavigator';
 import {AdProvider} from './app/context/AdContext';
 import {AuthProvider, useAuthContext} from './app/context/AuthContext';
 import {MapProvider} from './app/context/MapContext';
-import {appOpenAdUnitId} from './src/constants/adUnits';
 import i18n from './src/i18n';
 import {adManager} from './src/services/adManager';
 import {requestEssentialPermissions} from './src/utils/permissions';
+import {useAppOpenAd} from './src/hooks/useAppOpenAd';
 import {
   clearFcmTokenForUser,
   ensureFcmTokenForUser,
   registerForegroundNotificationHandler,
 } from './src/services/messagingService';
+import {requestNotificationPermission} from './src/services/messagingService';
 import SplashFallback from './src/components/SplashFallback';
+import {appOpenAdManager} from './src/services/appOpenAdManager';
 import {
   GOOGLE_MAPS_API_KEY,
   GOOGLE_MAPS_API_KEY_ANDROID,
@@ -31,10 +33,6 @@ import {
   PURCHASES_API_KEY_IOS,
 } from '@env';
 import appCheck from '@react-native-firebase/app-check';
-
-const appOpenAd = AppOpenAd.createForAdRequest(appOpenAdUnitId);
-let hasShownAppOpenAd = false;
-let isAppOpenAdLoaded = false;
 
 const AppContent: React.FC = () => {
   const {user, loading} = useAuthContext();
@@ -127,10 +125,30 @@ const AppContent: React.FC = () => {
 
 const App: React.FC = () => {
   const [isAppReady, setIsAppReady] = useState(false);
+  const {
+    isLoaded: isAppOpenAdLoaded,
+    isShowing: isAppOpenAdShowing,
+    hasShown: hasShownAppOpenAd,
+    lastError: appOpenAdError,
+    showAdIfAvailable,
+    loadAd: loadAppOpenAd,
+  } = useAppOpenAd();
 
   // Request runtime permissions on first mount
   useEffect(() => {
-    requestEssentialPermissions();
+    const requestStartupPermissions = async () => {
+      try {
+        await requestEssentialPermissions();
+      } catch (error) {
+        console.warn('[Permissions] Failed to request essentials', error);
+      }
+      try {
+        await requestNotificationPermission();
+      } catch (error) {
+        console.warn('[Permissions] Failed to request notifications', error);
+      }
+    };
+    requestStartupPermissions();
   }, []);
 
   // Enable Firebase App Check on Android (Play Integrity)
@@ -148,17 +166,24 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    const resolveMapsKey = () => {
+    const resolveGeocodingKey = () => {
+      // Prefer a dedicated cross-platform Geocoding key.
+      if (GOOGLE_MAPS_API_KEY) {
+        return GOOGLE_MAPS_API_KEY;
+      }
+
+      // Fallback to platform-specific keys only if no generic key is provided.
       if (Platform.OS === 'android') {
-        return GOOGLE_MAPS_API_KEY_ANDROID || GOOGLE_MAPS_API_KEY;
+        return GOOGLE_MAPS_API_KEY_ANDROID;
       }
       if (Platform.OS === 'ios') {
-        return GOOGLE_MAPS_API_KEY_IOS || GOOGLE_MAPS_API_KEY;
+        return GOOGLE_MAPS_API_KEY_IOS;
       }
-      return GOOGLE_MAPS_API_KEY;
+
+      return undefined;
     };
 
-    const mapsApiKey = resolveMapsKey();
+    const mapsApiKey = resolveGeocodingKey();
     if (!mapsApiKey) {
       console.warn(
         `[Orbitadrone] ${Platform.OS} Google Maps API key is missing. Reverse geocoding will fail.`,
@@ -187,82 +212,67 @@ const App: React.FC = () => {
       Purchases.configure({apiKey: purchasesApiKey});
     }
 
-    mobileAds()
-      .initialize()
-      .then(adapterStatuses => {
+    const initAds = async () => {
+      await appOpenAdManager.configureRequestOptions();
+
+      try {
+        const adapterStatuses = await mobileAds().initialize();
         console.log('Mobile Ads SDK initialized!', adapterStatuses);
-        adManager.initialize();
-        hasShownAppOpenAd = false;
-        isAppOpenAdLoaded = false;
-        appOpenAd.load();
-      });
-
-    const handleAppReady = () => {
-      if (!isAppReady) {
-        setIsAppReady(true);
+      } catch (error) {
+        console.warn('[Ads] Failed to initialize Google Mobile Ads', error);
       }
+
+      adManager.initialize();
+      appOpenAdManager.initialize();
+      loadAppOpenAd({force: true});
     };
 
-    const unsubscribeLoaded = appOpenAd.addAdEventListener(
-      AdEventType.LOADED,
-      () => {
-        console.log('App Open Ad loaded');
-        isAppOpenAdLoaded = true;
-        if (isAppReady && !hasShownAppOpenAd) {
-          try {
-            appOpenAd.show();
-            hasShownAppOpenAd = true;
-            isAppOpenAdLoaded = false;
-          } catch (error) {
-            console.warn('App Open Ad show failed on load', error);
-          }
-        }
-      },
-    );
-
-    const unsubscribeClosed = appOpenAd.addAdEventListener(
-      AdEventType.CLOSED,
-      () => {
-        console.log('App Open Ad closed');
-        hasShownAppOpenAd = true;
-        isAppOpenAdLoaded = false;
-        handleAppReady();
-      },
-    );
-
-    const unsubscribeError = appOpenAd.addAdEventListener(
-      AdEventType.ERROR,
-      error => {
-        console.warn('App Open Ad failed to load, proceeding with app.', error);
-        isAppOpenAdLoaded = false;
-        handleAppReady();
-        appOpenAd.load();
-      },
-    );
-
-    const timer = setTimeout(() => {
-      console.log('App Open Ad timed out. Proceeding with app.');
-      handleAppReady();
-    }, 5000);
-
-    return () => {
-      unsubscribeLoaded();
-      unsubscribeClosed();
-      unsubscribeError();
-      clearTimeout(timer);
-    };
-  }, [isAppReady]);
+    initAds();
+  }, [loadAppOpenAd]);
 
   useEffect(() => {
-    if (isAppReady && isAppOpenAdLoaded && !hasShownAppOpenAd) {
-      try {
-        appOpenAd.show();
-        hasShownAppOpenAd = true;
-        isAppOpenAdLoaded = false;
-      } catch (error) {
-        console.warn('App Open Ad show failed', error);
+    if (isAppReady) {
+      return;
+    }
+
+    if (isAppOpenAdLoaded && !isAppOpenAdShowing) {
+      const shown = showAdIfAvailable();
+      if (!shown) {
+        setIsAppReady(true);
       }
     }
+  }, [
+    isAppOpenAdLoaded,
+    isAppOpenAdShowing,
+    isAppReady,
+    showAdIfAvailable,
+  ]);
+
+  useEffect(() => {
+    if (!isAppReady && hasShownAppOpenAd && !isAppOpenAdShowing) {
+      setIsAppReady(true);
+    }
+  }, [hasShownAppOpenAd, isAppOpenAdShowing, isAppReady]);
+
+  useEffect(() => {
+    if (!isAppReady && appOpenAdError) {
+      setIsAppReady(true);
+    }
+  }, [appOpenAdError, isAppReady]);
+
+  useEffect(() => {
+    if (isAppReady) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      if (!isAppReady) {
+        console.log('App Open Ad timed out. Proceeding with app.');
+        setIsAppReady(true);
+      }
+    }, 6000);
+
+    return () => clearTimeout(timer);
   }, [isAppReady]);
 
   if (!isAppReady) {
