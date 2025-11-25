@@ -17,4 +17,5 @@ declare module '@env' {
   export const PURCHASES_API_KEY_IOS: string | undefined;
   export const BUNNY_LIBRARY_ID: string | undefined;
   export const BUNNY_CDN_HOST: string | undefined;
+  export const BUNNY_UPLOAD_ENDPOINT: string | undefined;
 }

@@ -19,7 +19,7 @@ const DEFAULT_RETRIABLE_CODES = new Set([
 
 const sleep = (ms: number) =>
   new Promise(resolve => {
-    setTimeout(resolve, ms);
+    setTimeout(() => resolve(null), ms);
   });
 
 const getStatusCode = (error: unknown): number | undefined => {

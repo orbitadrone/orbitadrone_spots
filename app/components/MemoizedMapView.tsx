@@ -25,6 +25,7 @@ interface MemoizedMapViewProps {
     longitude: number;
     photoUrl?: string | null;
   }>;
+  children?: React.ReactNode;
 }
 
 const MemoizedMapView = memo((
@@ -44,6 +45,7 @@ const MemoizedMapView = memo((
     showMarkers,
     pilotMarkers,
     handlePilotMarkerPress,
+    children,
   }: MemoizedMapViewProps
 ) => {
   return (
@@ -58,6 +60,7 @@ const MemoizedMapView = memo((
       showsCompass={showsCompass}
       mapType={mapType}
     >
+      {children}
       {selectedCoordinate && <Marker coordinate={selectedCoordinate} pinColor="green" />}
       {showMarkers &&
         spots.map((spot: any) => (

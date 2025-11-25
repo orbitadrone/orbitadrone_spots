@@ -120,7 +120,8 @@
     "enterComment": "Por favor, escribe un comentario.",
     "selectAtLeastOneReason": "Selecciona al menos un motivo para continuar.",
     "emailNotSupported": "No pudimos abrir una aplicación de correo en este dispositivo.",
-    "manageSubscriptionError": "No se pudo abrir la gestión de suscripciones. Inténtalo de nuevo más tarde."
+    "manageSubscriptionError": "No se pudo abrir la gestión de suscripciones. Inténtalo de nuevo más tarde.",
+    "spotOutsideSpain": "Los spots solo pueden crearse dentro de España."
   },
   "profile": {
     "title": "Configuración",
@@ -267,7 +268,12 @@
     "tipsLink": "Consejos para el usuario",
     "tipsTitle": "Antes de crear un spot",
     "tipsBody": "• Conéctate a una red Wi-Fi estable para subir los vídeos.\n• Tómate tu tiempo para describir el spot y añadir buen material.\n• Comprueba la ubicación y los permisos de vuelo antes de compartir.",
-    "galleryLimitReached": "Puedes subir hasta 5 fotos."
+    "galleryLimitReached": "Puedes subir hasta 5 fotos.",
+    "tagsLabel": "Etiquetas / hashtags",
+    "tagsHint": "Añade hasta {{max}} etiquetas para describir el spot (ej: #urbano #parque).",
+    "tagsPlaceholder": "#urbano #parque",
+    "addTagButton": "Añadir",
+    "noTagsYet": "Aún no hay etiquetas."
   },
   "flightStyles": {
     "freestyle": "Freestyle",
@@ -324,7 +330,7 @@
   },
   "map": {
     "gettingLocation": "Obteniendo ubicación...",
-    "searchPlaceholder": "Buscar...",
+    "searchPlaceholder": "Buscar spots o #hashtags...",
     "loadingSpots": "Cargando spots...",
     "actions": "Acciones",
     "createNewSpot": "Crear un nuevo Spot",

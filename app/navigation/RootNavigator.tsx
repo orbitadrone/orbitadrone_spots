@@ -9,7 +9,7 @@ import LegalScreen from '../screens/LegalScreen';
 
 const Stack = createStackNavigator();
 
-const linking: LinkingOptions = {
+const linking: LinkingOptions<any> = {
   prefixes: ['https://orbitadrone.com', 'orbitadrone://'],
   config: {
     screens: {
@@ -36,7 +36,7 @@ const RootNavigator = ({ user }: { user: any }) => {
 
   return (
     <NavigationContainer linking={linking}>
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Navigator id={undefined} screenOptions={{ headerShown: false }}>
         {user ? (
           <Stack.Screen name="App" component={AppNavigator} />
         ) : (

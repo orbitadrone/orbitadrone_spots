@@ -14,6 +14,7 @@ import { useAuthContext } from '../context/AuthContext';
 
 import { flightStylesOptions } from '../../src/constants/flightStyles';
 import { requestMediaPermission, requestCameraPermission } from '../../src/utils/permissions';
+import { validateSpainLocation } from '../../src/utils/geoUtils';
 import { uploadVideoToBunny } from '../../src/services/bunnyStreamService';
 
 const VIDEO_LIMITS = {
@@ -26,6 +27,7 @@ const VIDEO_LIMITS = {
 } as const;
 
 const BYTES_PER_MB = 1024 * 1024;
+const MAX_TAGS = 8;
 
 const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params?: { spot?: Spot, originalSpot?: Spot, coordinate?: { latitude: number, longitude: number } } } }) => {
   const { t } = useTranslation();
@@ -45,6 +47,8 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
   const [galleryImages, setGalleryImages] = useState<string[]>(spotToEdit?.galleryImages || []);
   const [videoUri, setVideoUri] = useState<string | null>(spotToEdit?.videoUrl || null);
   const [flightStyles, setFlightStyles] = useState<string[]>(spotToEdit?.flightStyles || []);
+  const [tags, setTags] = useState<string[]>(spotToEdit?.tags || []);
+  const [tagInput, setTagInput] = useState('');
   const [uploadingVideo, setUploadingVideo] = useState(false);
   const [videoUploadProgress, setVideoUploadProgress] = useState(0);
   const [showTipsModal, setShowTipsModal] = useState(false);
@@ -127,6 +131,29 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
     );
   };
 
+  const normalizeTag = (value: string) => {
+    const cleaned = value.replace(/^#+/, '').trim().toLowerCase();
+    return cleaned.replace(/\s+/g, '');
+  };
+
+  const addTagsFromInput = () => {
+    const candidates = tagInput
+      .split(/[\s,]+/)
+      .map(token => normalizeTag(token))
+      .filter(Boolean);
+    if (!candidates.length) {
+      setTagInput('');
+      return;
+    }
+    const merged = Array.from(new Set([...tags, ...candidates])).slice(0, MAX_TAGS);
+    setTags(merged);
+    setTagInput('');
+  };
+
+  const removeTag = (tagToRemove: string) => {
+    setTags(prev => prev.filter(tag => tag !== tagToRemove));
+  };
+
   useEffect(() => {
     if (!isEditing && coordinate && !spotAddress) {
       const fetchAddress = async () => {
@@ -172,8 +199,8 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
     }
   };
 
-  const ensureFileLikeUri = (input?: string | null) => {
-    if (!input) {
+  const ensureFileLikeUri = (input: any) => {
+    if (typeof input !== 'string') {
       return null;
     }
     if (input.startsWith('file://') || input.startsWith('content://')) {
@@ -185,7 +212,7 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
     return `file:///${input}`;
   };
 
-  const normalizeVideoUri = (asset: Pick<Asset, 'uri' | 'path'> & Partial<Asset>) => {
+  const normalizeVideoUri = (asset: any) => {
     const { uri, path } = asset;
     if (uri?.startsWith('content://')) {
       return uri;
@@ -301,6 +328,17 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
     }
     setLoading(true);
     try {
+      if (!isEditing && coordinate) {
+        const { isSpain } = await validateSpainLocation(
+          coordinate.latitude,
+          coordinate.longitude,
+        );
+        if (!isSpain) {
+          Alert.alert(t('alerts.error'), t('alerts.spotOutsideSpain'));
+          return;
+        }
+      }
+
       const uploadImageIfNeeded = async (uri: string | null, pathPrefix: string) => {
         if (uri && uri.startsWith('file://')) {
           const path = `${pathPrefix}/${Date.now()}_${spotName.replace(/\s/g, '_')}`;
@@ -348,11 +386,17 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
         (url): url is string => !!url,
       );
 
+      const normalizedTags = tags
+        .map(value => normalizeTag(value))
+        .filter(Boolean)
+        .slice(0, MAX_TAGS);
+
       const spotData: any = {
         name: spotName,
         address: spotAddress,
         description: spotDescription,
         flightStyles: flightStyles,
+        tags: normalizedTags,
       };
 
       if (isEditing && spot) {
@@ -499,6 +543,37 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
         <Text style={styles.label}>{t('addSpot.namePlaceholder')}</Text>
         <TextInput style={styles.input} value={spotName} onChangeText={setSpotName} placeholder={t('addSpot.namePlaceholder')} />
         <Text style={styles.explanationText}>{t('addSpot.nameExplanation')}</Text>
+
+        <View style={styles.sectionContainer}>
+          <Text style={styles.label}>{t('addSpot.tagsLabel')}</Text>
+          <Text style={styles.explanationText}>{t('addSpot.tagsHint', { max: MAX_TAGS })}</Text>
+          <View style={styles.tagInputRow}>
+            <TextInput
+              style={[styles.input, styles.tagInput]}
+              value={tagInput}
+              onChangeText={setTagInput}
+              placeholder={t('addSpot.tagsPlaceholder')}
+              onSubmitEditing={addTagsFromInput}
+              returnKeyType="done"
+            />
+            <TouchableOpacity style={styles.addTagButton} onPress={addTagsFromInput}>
+              <Text style={styles.addTagButtonText}>{t('addSpot.addTagButton')}</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.tagsList}>
+            {tags.map(tag => (
+              <View key={tag} style={styles.tagPill}>
+                <Text style={styles.tagText}>#{tag}</Text>
+                <TouchableOpacity onPress={() => removeTag(tag)} style={styles.removeTagButton}>
+                  <Icon name="times" size={14} color="#555" />
+                </TouchableOpacity>
+              </View>
+            ))}
+            {tags.length === 0 && (
+              <Text style={styles.noTagsText}>{t('addSpot.noTagsYet')}</Text>
+            )}
+          </View>
+        </View>
 
         <Text style={styles.label}>{t('addSpot.descriptionPlaceholder')}</Text>
         <TextInput style={[styles.input, styles.bioInput]} value={spotDescription} onChangeText={setSpotDescription} placeholder={t('addSpot.descriptionPlaceholder')} multiline numberOfLines={4} />
@@ -733,6 +808,51 @@ const styles = StyleSheet.create({
     fontSize: 12,
     textAlign: 'center',
     marginTop: 5,
+  },
+  tagInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  tagInput: {
+    flex: 1,
+  },
+  addTagButton: {
+    backgroundColor: '#007BFF',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    alignSelf: 'stretch',
+    justifyContent: 'center',
+  },
+  addTagButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  tagsList: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 10,
+  },
+  tagPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f0f0f0',
+    borderRadius: 16,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  tagText: {
+    fontSize: 14,
+    color: '#333',
+  },
+  removeTagButton: {
+    marginLeft: 6,
+  },
+  noTagsText: {
+    color: 'gray',
+    fontSize: 13,
   },
   flightStylesContainer: {
     flexDirection: 'row',

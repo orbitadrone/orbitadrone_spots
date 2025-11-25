@@ -74,6 +74,7 @@ export interface Spot {
   videoUrl?: string;
   address?: string;
   flightStyles?: string[];
+  tags?: string[];
 }
 
 export interface Review {
@@ -176,7 +177,20 @@ export const getUserProfile = async (userId: string): Promise<UserProfile | null
   return { id: docSnap.id, ...docSnap.data() } as UserProfile;
 };
 
-export const addSpot = async (spotData: { name: string; nickname?: string; description: string; latitude: number; longitude: number; mainImage?: string; backgroundUrl?: string; address?: string; galleryImages?: string[]; videoUrl?: string; }) => {
+export const addSpot = async (spotData: {
+  name: string;
+  nickname?: string;
+  description: string;
+  latitude: number;
+  longitude: number;
+  mainImage?: string;
+  backgroundUrl?: string;
+  address?: string;
+  galleryImages?: string[];
+  videoUrl?: string;
+  flightStyles?: string[];
+  tags?: string[];
+}) => {
   const currentUser = auth.currentUser;
   if (!currentUser) throw new Error("Usuario no autenticado para crear un spot.");
 

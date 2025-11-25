@@ -59,7 +59,7 @@ export const uploadVideoToBunny = async ({
     headers['Authorization'] = `Bearer ${idToken}`;
   }
 
-  return new Promise((resolve, reject) => {
+  return new Promise<{ guid: string; playbackUrl: string }>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', BUNNY_UPLOAD_ENDPOINT, true);
     Object.entries(headers).forEach(([key, value]) => {

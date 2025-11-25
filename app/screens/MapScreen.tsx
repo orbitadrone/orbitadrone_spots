@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { StyleSheet, View, Text, TouchableOpacity, Modal, TextInput, ActivityIndicator, Alert, Image, ScrollView, Button, FlatList } from 'react-native';
-import MapView, { Marker, PROVIDER_GOOGLE, MapPressEvent, Region, MapType } from 'react-native-maps';
+import { StyleSheet, View, Text, TouchableOpacity, Modal, TextInput, ActivityIndicator, Alert, Image, Button, FlatList, Platform } from 'react-native';
+import MapView, { MapPressEvent, Region, MapType, Polygon } from 'react-native-maps';
+import RNFS from 'react-native-fs';
+
 import MemoizedMapView from '../components/MemoizedMapView';
 import { useNavigation } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
@@ -18,7 +20,6 @@ import {
 import { navigateToSpotAfterAd } from '../../src/utils/spotsNavigation';
 import CustomButton from '../components/CustomButton';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import SpotMarker from '../components/SpotMarker';
 import Geolocation from '@react-native-community/geolocation';
 import CheckBox from '@react-native-community/checkbox';
 import { adManager } from '../../src/services/adManager';
@@ -69,6 +70,54 @@ export default function MapScreen() {
   const [isPilotProfileLoading, setPilotProfileLoading] = useState(true);
   const [pilotMarkers, setPilotMarkers] = useState<PilotMarkerMapEntry[]>([]);
   const [showMapInstructions, setShowMapInstructions] = useState(true);
+  const [spainGeoData, setSpainGeoData] = useState<any>(null); // New state for GeoJSON data
+
+  const isValidPilotMarker = (marker?: { latitude?: number; longitude?: number }) =>
+    Boolean(
+      marker &&
+        typeof marker.latitude === 'number' &&
+        typeof marker.longitude === 'number',
+    );
+
+  const pilotMarker = pilotProfile?.pilotMarker;
+  const pilotMarkerData = useMemo(() => {
+    return isValidPilotMarker(pilotMarker) && pilotProfile?.showPilotMarker !== false
+      ? {
+          latitude: pilotMarker!.latitude,
+          longitude: pilotMarker!.longitude,
+          photoUrl: pilotProfile?.profilePictureUrl,
+        }
+      : null;
+  }, [pilotMarker, pilotProfile?.showPilotMarker, pilotProfile?.profilePictureUrl]);
+
+  const pilotMarkersForMap = useMemo(() => {
+    if (!pilotMarkerData || !user?.uid) {
+      return pilotMarkers;
+    }
+    const existingIndex = pilotMarkers.findIndex(
+      marker => marker.id === user.uid,
+    );
+    if (existingIndex !== -1) {
+      const updated = [...pilotMarkers];
+      updated[existingIndex] = {
+        ...updated[existingIndex],
+        latitude: pilotMarkerData.latitude,
+        longitude: pilotMarkerData.longitude,
+        photoUrl:
+          pilotMarkerData.photoUrl ?? updated[existingIndex].photoUrl ?? null,
+      };
+      return updated;
+    }
+    return [
+      ...pilotMarkers,
+      {
+        id: user.uid,
+        latitude: pilotMarkerData.latitude,
+        longitude: pilotMarkerData.longitude,
+        photoUrl: pilotMarkerData.photoUrl ?? null,
+      },
+    ];
+  }, [pilotMarkers, pilotMarkerData, user?.uid]);
 
   // --- Estados para el buscador y filtro ---
   const [searchQuery, setSearchQuery] = useState('');
@@ -78,6 +127,41 @@ export default function MapScreen() {
   const [displayPilots, setDisplayPilots] = useState<PilotMarkerMapEntry[]>([]);
   const [isRemoveAdsModalVisible, setRemoveAdsModalVisible] = useState(false);
   // --- Fin de estados para el buscador ---
+
+  const animateToRegion = useCallback(
+    (target: Region, duration = 1000) => {
+      isAnimatingMap.current = true;
+      mapRef.current?.animateToRegion(target, duration);
+      setRegion(target);
+      setTimeout(() => {
+        isAnimatingMap.current = false;
+      }, duration + 200);
+      return target;
+    },
+    [setRegion],
+  );
+
+  const normalizeTag = useCallback((value: string) => {
+    const cleaned = value.replace(/^#+/, '').trim().toLowerCase();
+    return cleaned.replace(/\s+/g, '');
+  }, []);
+
+  const parsedSearch = useMemo(() => {
+    const tokens = searchQuery.split(/\s+/).map(token => token.trim()).filter(Boolean);
+    const tags = tokens
+      .filter(token => token.startsWith('#'))
+      .map(token => normalizeTag(token))
+      .filter(Boolean);
+    const terms = tokens
+      .filter(token => !token.startsWith('#'))
+      .map(token => token.toLowerCase());
+    return {
+      tags,
+      terms,
+      hasSearch: tokens.length > 0,
+      plainQuery: terms.join(' ').trim(),
+    };
+  }, [searchQuery, normalizeTag]);
 
   const handleCenterOnUserLocation = useCallback(async () => {
     const hasPermission = await requestLocationPermission();
@@ -92,14 +176,13 @@ export default function MapScreen() {
     Geolocation.getCurrentPosition(
       position => {
         const {latitude, longitude} = position.coords;
-        const newRegion = {
+        const newRegion: Region = {
           latitude,
           longitude,
           latitudeDelta: 0.0922,
           longitudeDelta: 0.0421,
         };
-        mapRef.current?.animateToRegion(newRegion, 1000);
-        setRegion(newRegion);
+        animateToRegion(newRegion, 1000);
       },
       geolocationError => {
         let errorMessage = t('map.locationError');
@@ -107,7 +190,7 @@ export default function MapScreen() {
           errorMessage += `\nError: ${geolocationError.message}`;
         }
         Alert.alert(t('alerts.error'), errorMessage);
-        setRegion({
+        animateToRegion({
           latitude: 41.3851,
           longitude: 2.1734,
           latitudeDelta: 0.0922,
@@ -116,7 +199,7 @@ export default function MapScreen() {
       },
       {enableHighAccuracy: false, timeout: 20000, maximumAge: 1000},
     );
-  }, [setRegion, t]);
+  }, [animateToRegion, setRegion, t]);
 
 
   useEffect(() => {
@@ -130,15 +213,20 @@ export default function MapScreen() {
   // --- Lógica de filtrado ---
   useEffect(() => {
     let spotsResult = [...spots];
-    const hasSearch = searchQuery.trim() !== '';
+    const {hasSearch, terms, tags, plainQuery} = parsedSearch;
     if (hasSearch) {
-      const lowercasedQuery = searchQuery.toLowerCase();
-      spotsResult = spotsResult.filter(
-        spot =>
-          spot.name.toLowerCase().includes(lowercasedQuery) ||
-          (spot.address && spot.address.toLowerCase().includes(lowercasedQuery)) ||
-          spot.description.toLowerCase().includes(lowercasedQuery),
-      );
+      if (terms.length > 0) {
+        spotsResult = spotsResult.filter(spot => {
+          const haystack = `${spot.name} ${spot.address ?? ''} ${spot.description ?? ''}`.toLowerCase();
+          return terms.every(term => haystack.includes(term));
+        });
+      }
+      if (tags.length > 0) {
+        spotsResult = spotsResult.filter(spot => {
+          const spotTags = (spot.tags ?? []).map(value => normalizeTag(value));
+          return tags.every(tag => spotTags.includes(tag));
+        });
+      }
     }
 
     if (selectedStyles.length > 0) {
@@ -151,9 +239,9 @@ export default function MapScreen() {
       hasSearch || selectedStyles.length > 0 ? spotsResult : spots,
     );
 
-    if (hasSearch) {
-      const lowercasedQuery = searchQuery.toLowerCase();
+    if (plainQuery) {
       const pilotMatches = pilotMarkersForMap.filter(marker => {
+        const lowercasedQuery = plainQuery.toLowerCase();
         const nameMatch = marker.displayName?.toLowerCase().includes(lowercasedQuery);
         const regionMatch = marker.cityRegion?.toLowerCase().includes(lowercasedQuery);
         return Boolean(nameMatch || regionMatch);
@@ -162,7 +250,7 @@ export default function MapScreen() {
     } else {
       setDisplayPilots([]);
     }
-  }, [searchQuery, selectedStyles, spots, pilotMarkersForMap]);
+  }, [parsedSearch, selectedStyles, spots, pilotMarkersForMap, normalizeTag]);
   // --- Fin de la lógica de filtrado ---
 
   useEffect(() => {
@@ -179,8 +267,8 @@ export default function MapScreen() {
         if (!cancelled) {
           setPilotProfile(data);
         }
-      } catch (error) {
-        console.error('[MapScreen] failed to fetch user profile', error);
+      } catch (err) {
+        console.error('[MapScreen] failed to fetch user profile', err);
       } finally {
         if (!cancelled) {
           setPilotProfileLoading(false);
@@ -193,6 +281,32 @@ export default function MapScreen() {
     };
   }, [user]);
 
+  
+
+      useEffect(() => {
+    const getAssetPath = (filename: string) => {
+      if (Platform.OS === 'android') {
+        return `file:///android_asset/${filename}`;
+      }
+      // For iOS, files in the main bundle are usually accessed directly by name
+      // or through NSBundle.mainBundle().pathForResource.
+      // For simplicity here, we'll assume direct access if bundled correctly.
+      // For complex cases, a native bridge might be needed.
+      return filename;
+    };
+
+    const loadSpainGeo = async () => {
+      try {
+        const path = getAssetPath('spain.json');
+        const content = await RNFS.readFile(path, 'utf8');
+        setSpainGeoData(JSON.parse(content));
+      } catch (error) {
+        console.error('Error loading spain.json:', error);
+      }
+    };
+    loadSpainGeo();
+  }, []);
+
   const onRegionChangeComplete = (newRegion: Region) => {
     if (isAnimatingMap.current) {
       return;
@@ -200,17 +314,13 @@ export default function MapScreen() {
     if (!areRegionsSimilar(region, newRegion)) {
       setRegion(newRegion);
     }
-    // Aproximadamente 1 grado de latitud = 111 km
-    // Queremos mostrar marcadores si estamos a menos de ~28 km de altura (delta < 0.25)
     const zoomThreshold = 0.25;
     if (newRegion.latitudeDelta < zoomThreshold) {
       if (!showSpotsOnZoom) {
-        console.log('MapScreen: enabling markers, delta', newRegion.latitudeDelta);
         setShowSpotsOnZoom(true);
       }
     } else {
       if (showSpotsOnZoom) {
-        console.log('MapScreen: disabling markers, delta', newRegion.latitudeDelta);
         setShowSpotsOnZoom(false);
       }
     }
@@ -253,8 +363,8 @@ export default function MapScreen() {
     try {
       const markers = await getPublicPilotMarkers();
       setPilotMarkers(markers);
-    } catch (error) {
-      console.error('[MapScreen] failed to fetch pilot markers', error);
+    } catch (err) {
+      console.error('[MapScreen] failed to fetch pilot markers', err);
     }
   }, []);
 
@@ -274,50 +384,6 @@ export default function MapScreen() {
 
 
 
-  const isValidPilotMarker = (marker?: { latitude?: number; longitude?: number }) =>
-    Boolean(
-      marker &&
-        typeof marker.latitude === 'number' &&
-        typeof marker.longitude === 'number',
-    );
-
-  const pilotMarker = pilotProfile?.pilotMarker;
-  const pilotMarkerData =
-    isValidPilotMarker(pilotMarker) && pilotProfile?.showPilotMarker !== false
-      ? {
-          latitude: pilotMarker.latitude,
-          longitude: pilotMarker.longitude,
-          photoUrl: pilotProfile?.profilePictureUrl,
-        }
-      : null;
-  const pilotMarkersForMap = useMemo(() => {
-    if (!pilotMarkerData || !user?.uid) {
-      return pilotMarkers;
-    }
-    const existingIndex = pilotMarkers.findIndex(
-      marker => marker.id === user.uid,
-    );
-    if (existingIndex !== -1) {
-      const updated = [...pilotMarkers];
-      updated[existingIndex] = {
-        ...updated[existingIndex],
-        latitude: pilotMarkerData.latitude,
-        longitude: pilotMarkerData.longitude,
-        photoUrl:
-          pilotMarkerData.photoUrl ?? updated[existingIndex].photoUrl ?? null,
-      };
-      return updated;
-    }
-    return [
-      ...pilotMarkers,
-      {
-        id: user.uid,
-        latitude: pilotMarkerData.latitude,
-        longitude: pilotMarkerData.longitude,
-        photoUrl: pilotMarkerData.photoUrl ?? null,
-      },
-    ];
-  }, [pilotMarkers, pilotMarkerData, user?.uid]);
   const searchResults = useMemo<SearchResult[]>(() => {
     const pilotEntries = displayPilots.map(pilot => ({
       type: 'pilot' as const,
@@ -368,8 +434,7 @@ export default function MapScreen() {
       latitudeDelta: 0.01,
       longitudeDelta: 0.01,
     };
-    mapRef.current?.animateToRegion(spotRegion, 1000);
-    setRegion(spotRegion);
+    animateToRegion(spotRegion, 1000);
     setSelectedSpot(spot); // Seleccionar el spot para mostrar el callout
     
     // Limpiar búsqueda para cerrar la lista
@@ -394,14 +459,31 @@ export default function MapScreen() {
         latitudeDelta: 0.01,
         longitudeDelta: 0.01,
       };
-      mapRef.current?.animateToRegion(pilotRegion, 1000);
-      setRegion(pilotRegion);
+      animateToRegion(pilotRegion, 1000);
       setSearchQuery('');
       setSelectedStyles([]);
       handlePilotMarkerPress(pilot.id);
     },
-    [handlePilotMarkerPress, setRegion],
+    [animateToRegion, handlePilotMarkerPress],
   );
+
+  const holes = useMemo(() => {
+    if (!spainGeoData) {
+      return [];
+    }
+    const spainFeature = spainGeoData.features.find((f: any) => f.id === 'ESP');
+    if (!spainFeature || spainFeature.geometry.type !== 'MultiPolygon') {
+      return [];
+    }
+    return spainFeature.geometry.coordinates.flatMap((polygon: any) =>
+      polygon.map((ring: any) =>
+        ring.map((coord: any) => ({
+          latitude: coord[1],
+          longitude: coord[0],
+        })),
+      ),
+    );
+  }, [spainGeoData]);
 
   return (
     <View style={styles.container}>
@@ -448,7 +530,23 @@ export default function MapScreen() {
           pilotMarkers={pilotMarkersForMap}
           handlePilotMarkerPress={handlePilotMarkerPress}
           showMarkers={showSpotsOnZoom}
-        />
+        >
+          {spainGeoData && (
+            <Polygon
+              coordinates={[
+                { latitude: 90, longitude: -180 },
+                { latitude: 90, longitude: 0 },
+                { latitude: 90, longitude: 180 },
+                { latitude: -90, longitude: 180 },
+                { latitude: -90, longitude: 0 },
+                { latitude: -90, longitude: -180 },
+              ]}
+              holes={holes}
+              fillColor="rgba(0,0,0,0.5)"
+              strokeWidth={0}
+            />
+          )}
+        </MemoizedMapView>
       )}
 
       <View style={styles.headerContainer}>

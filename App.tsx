@@ -1,5 +1,6 @@
 import React, {Suspense, useCallback, useEffect, useRef, useState} from 'react';
 import {Linking, Platform} from 'react-native';
+import {GestureHandlerRootView} from 'react-native-gesture-handler';
 import {SafeAreaProvider} from 'react-native-safe-area-context';
 import {I18nextProvider} from 'react-i18next';
 import mobileAds from 'react-native-google-mobile-ads';
@@ -280,20 +281,22 @@ const App: React.FC = () => {
   }
 
   return (
-    <SafeAreaProvider>
-      <Suspense fallback={<SplashFallback />}>
-        <I18nextProvider i18n={i18n}>
-          <AuthProvider>
-            <AdProvider>
-              <MapProvider>
-                <AppContent />
-                <Toast />
-              </MapProvider>
-            </AdProvider>
-          </AuthProvider>
-        </I18nextProvider>
-      </Suspense>
-    </SafeAreaProvider>
+    <GestureHandlerRootView style={{flex: 1}}>
+      <SafeAreaProvider>
+        <Suspense fallback={<SplashFallback />}>
+          <I18nextProvider i18n={i18n}>
+            <AuthProvider>
+              <AdProvider>
+                <MapProvider>
+                  <AppContent />
+                  <Toast />
+                </MapProvider>
+              </AdProvider>
+            </AuthProvider>
+          </I18nextProvider>
+        </Suspense>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 };
 

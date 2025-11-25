@@ -21,7 +21,7 @@ const requestAndroidPermissions = async (permissions: string[]) => {
     return true;
   }
 
-  const result = await PermissionsAndroid.requestMultiple(uniquePermissions);
+  const result = await PermissionsAndroid.requestMultiple(uniquePermissions as any);
   return uniquePermissions.every(
     permission => result[permission] === PermissionsAndroid.RESULTS.GRANTED,
   );
@@ -29,7 +29,7 @@ const requestAndroidPermissions = async (permissions: string[]) => {
 
 export const requestLocationPermission = async () => {
   if (Platform.OS === 'ios') {
-    Geolocation.requestAuthorization('whenInUse');
+    Geolocation.requestAuthorization();
     return true;
   }
 
@@ -75,6 +75,6 @@ export const requestEssentialPermissions = async () => {
       Platform.Version >= 33 ? ANDROID_POST_NOTIFICATIONS : null,
     ].filter(Boolean) as string[]);
   } else {
-    Geolocation.requestAuthorization('whenInUse');
+    Geolocation.requestAuthorization();
   }
 };

@@ -106,15 +106,12 @@ const SignupScreen = () => {
       }
     };
 
-    const handleError = (error: any) => {
-      if (error?.code !== 'E_PICKER_CANCELLED') {
-        console.log(error);
-        Toast.show({
-          type: 'error',
-          text1: t('alerts.error'),
-          text2: t('alerts.imagePickerError'),
-        });
-      }
+    const handleError = () => {
+      Toast.show({
+        type: 'error',
+        text1: t('alerts.error'),
+        text2: t('alerts.imagePickerError'),
+      });
     };
 
     Alert.alert(

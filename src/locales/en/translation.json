@@ -89,7 +89,8 @@
     "enterComment": "Please write a comment.",
     "manageSubscriptionError": "Unable to open subscription management. Please try again later.",
     "selectAtLeastOneReason": "Select at least one reason to continue.",
-    "emailNotSupported": "We couldn't open the mail app on this device."
+    "emailNotSupported": "We couldn't open the mail app on this device.",
+    "spotOutsideSpain": "Spots can only be created within Spain."
   },
   "spotDetail": {
     "addReviewButton": "Add rating",
@@ -236,7 +237,12 @@
     "tipsLink": "User tips",
     "tipsTitle": "Before you create a spot",
     "tipsBody": "• Connect to a stable Wi‑Fi network before uploading videos.\n• Take your time to describe the spot and add quality photos/videos.\n• Double-check the location and flight permissions prior to publishing.",
-    "galleryLimitReached": "You can upload up to 5 photos."
+    "galleryLimitReached": "You can upload up to 5 photos.",
+    "tagsLabel": "Tags / hashtags",
+    "tagsHint": "Add up to {{max}} tags to describe the spot (e.g., #urban #park).",
+    "tagsPlaceholder": "#urban #park",
+    "addTagButton": "Add",
+    "noTagsYet": "No tags added yet."
   },
   "flightStyles": {
     "freestyle": "Freestyle",
@@ -293,7 +299,7 @@
   },
   "map": {
     "gettingLocation": "Getting location...",
-    "searchPlaceholder": "Search...",
+    "searchPlaceholder": "Search spots or #hashtags...",
     "loadingSpots": "Loading spots...",
     "actions": "Actions",
     "createNewSpot": "Create a New Spot",

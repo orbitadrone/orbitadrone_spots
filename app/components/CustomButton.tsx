@@ -49,11 +49,16 @@ const CustomButton: React.FC<CustomButtonProps> = ({
       ? Colors[theme].textDark
       : textColor || Colors[theme].text;
 
+  const dynamicStyle = {
+    backgroundColor: buttonBackgroundColor,
+    opacity: disabled ? 0.6 : 1,
+  };
+
   return (
     <TouchableOpacity
       style={[
         styles.button,
-        {backgroundColor: buttonBackgroundColor, opacity: disabled ? 0.6 : 1},
+        dynamicStyle,
         style,
       ]}
       onPress={onPress}

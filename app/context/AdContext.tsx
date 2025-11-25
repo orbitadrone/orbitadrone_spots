@@ -1,5 +1,5 @@
 import React, { createContext, useState, useContext, ReactNode, useEffect } from 'react';
-import Purchases, { CustomerInfo } from 'react-native-purchases';
+import Purchases from 'react-native-purchases';
 import { REMOVE_ADS_ENTITLEMENT_ID } from '../../src/constants/purchases';
 
 interface AdContextType {

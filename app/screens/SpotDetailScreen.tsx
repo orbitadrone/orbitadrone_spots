@@ -1,13 +1,12 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator, ScrollView, Alert, Button, Image, Linking, TouchableOpacity, Share, Modal, TextInput } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
-import { Spot, Review, UserProfile, getSpot, getReviewsForSpot, getUserProfile, deleteSpot, getSpotWithVersions } from '../../src/services/firestoreService';
-import { navigateToSpotAfterAd } from '../../src/utils/spotsNavigation';
+import { Spot, Review, UserProfile, getSpot, getReviewsForSpot, getUserProfile, deleteSpot } from '../../src/services/firestoreService';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import CheckBox from '@react-native-community/checkbox';
-import { Platform } from 'react-native';
 import Video from 'react-native-video';
 
+import ImageViewing from 'react-native-image-viewing';
 import { Rating } from 'react-native-ratings';
 import { useTranslation } from 'react-i18next';
 import { useAuthContext } from '../context/AuthContext';
@@ -33,7 +32,7 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
   const [videoModalVisible, setVideoModalVisible] = useState(false);
   const [currentVideoInfo, setCurrentVideoInfo] = useState<{ url: string; type: 'native' | 'bunny'; guid?: string } | null>(null);
   const [imageModalVisible, setImageModalVisible] = useState(false);
-  const [currentImageUrl, setCurrentImageUrl] = useState<string | null>(null);
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const spotReportOptions = useMemo(
     () => [
       { key: 'photo', label: t('reportReasons.photo') },
@@ -60,14 +59,9 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
   const [reviewReportReasons, setReviewReportReasons] = useState<Record<string, boolean>>({});
   const [reviewReportNotes, setReviewReportNotes] = useState('');
 
-  const openImageModal = useCallback((url: string) => {
-    setCurrentImageUrl(url);
+  const openImageModal = useCallback((index: number) => {
+    setCurrentImageIndex(index);
     setImageModalVisible(true);
-  }, []);
-
-  const closeImageModal = useCallback(() => {
-    setImageModalVisible(false);
-    setCurrentImageUrl(null);
   }, []);
 
   const openSpotReportModal = useCallback(() => {
@@ -115,7 +109,7 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
     } catch (error) {
       Alert.alert(t('alerts.error'), t('alerts.emailNotSupported'));
     }
-  }, [spot, spotReportOptions, spotReportReasons, spotReportNotes, buildSpotShareUrl, t]);
+  }, [spot, spotReportOptions, spotReportReasons, spotReportNotes]);
 
   const openReviewReportModal = useCallback((review: Review) => {
     setReviewReportTarget(review);
@@ -174,7 +168,7 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
     } catch (error) {
       Alert.alert(t('alerts.error'), t('alerts.emailNotSupported'));
     }
-  }, [spot, reviewReportTarget, reviewReportOptions, reviewReportReasons, reviewReportNotes, buildSpotShareUrl, reviewAuthors, closeReviewReportModal, t]);
+  }, [spot, reviewReportTarget, reviewReportOptions, reviewReportReasons, reviewReportNotes, reviewAuthors, closeReviewReportModal]);
 
   useFocusEffect(
     useCallback(() => {
@@ -499,7 +493,7 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
               <TouchableOpacity
                 key={index}
                 activeOpacity={0.8}
-                onPress={() => openImageModal(url)}
+                onPress={() => openImageModal(index)}
               >
                 <Image source={{ uri: url }} style={styles.galleryImage} />
               </TouchableOpacity>
@@ -739,28 +733,12 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
         </View>
       </Modal>
 
-      <Modal
-        animationType="fade"
-        transparent
-        visible={imageModalVisible && !!currentImageUrl}
-        onRequestClose={closeImageModal}
-      >
-        <View style={styles.imageModalBackdrop}>
-          <TouchableOpacity
-            style={styles.imageModalBackdrop}
-            activeOpacity={1}
-            onPress={closeImageModal}
-          >
-            {currentImageUrl && (
-              <Image
-                source={{ uri: currentImageUrl }}
-                style={styles.fullscreenImage}
-                resizeMode="contain"
-              />
-            )}
-          </TouchableOpacity>
-        </View>
-      </Modal>
+      <ImageViewing
+        images={spot.galleryImages?.map((uri) => ({ uri })) || []}
+        imageIndex={currentImageIndex}
+        visible={imageModalVisible}
+        onRequestClose={() => setImageModalVisible(false)}
+      />
 
       <Modal
         animationType="slide"
@@ -963,16 +941,6 @@ const styles = StyleSheet.create({
     height: 120,
     borderRadius: 8,
     marginRight: 10,
-  },
-  imageModalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.9)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  fullscreenImage: {
-    width: '100%',
-    height: '100%',
   },
   videoThumbnail: {
     width: '100%',

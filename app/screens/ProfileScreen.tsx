@@ -13,6 +13,8 @@ import {
   ImageBackground,
   Modal,
   Pressable,
+  Platform,
+  Linking,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
@@ -127,14 +129,6 @@ const ProfileScreen = () => {
   const [reauthLoading, setReauthLoading] = useState(false);
   const [isRemoveAdsModalVisible, setRemoveAdsModalVisible] = useState(false);
 
-  useEffect(() => {
-    if (user) {
-      fetchProfile(user.uid);
-    } else {
-      setLoading(false);
-    }
-  }, [user, fetchProfile]);
-
   const fetchProfile = useCallback(async (uid: string) => {
     setLoading(true);
     try {
@@ -156,6 +150,14 @@ const ProfileScreen = () => {
       setLoading(false);
     }
   }, [t]);
+
+  useEffect(() => {
+    if (user) {
+      fetchProfile(user.uid);
+    } else {
+      setLoading(false);
+    }
+  }, [user, fetchProfile]);
 
   const handleChoosePhoto = (type: 'profile' | 'background') => {
     const pickerOptions = {
@@ -281,7 +283,11 @@ const ProfileScreen = () => {
 
   const handleManageSubscription = async () => {
     try {
-      await Purchases.manageSubscriptions();
+      if (Platform.OS === 'ios') {
+        Linking.openURL('https://apps.apple.com/account/subscriptions');
+      } else {
+        Linking.openURL('https://play.google.com/store/account/subscriptions');
+      }
       setCancelSubscriptionModalVisible(false);
     } catch (error) {
       console.error('[Profile] manageSubscriptions failed', error);
@@ -321,7 +327,7 @@ const ProfileScreen = () => {
       const current = Array.isArray(p.pilotTypes) ? p.pilotTypes : [];
       const exists = current.includes(type);
       const next = exists ? current.filter(item => item !== type) : [...current, type];
-      return { ...p, pilotTypes: next, pilotType: next[0] };
+      return { ...p, pilotTypes: next, pilotType: next[0] || null } as Partial<UserProfile>;
     });
   };
 

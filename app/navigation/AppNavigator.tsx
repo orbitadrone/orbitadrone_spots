@@ -21,6 +21,7 @@ function MainTabNavigator() {
   const { t } = useTranslation(); // La traducción se obtiene aquí
   return (
     <Tab.Navigator
+      id={undefined}
       screenOptions={({ route }) => ({
         tabBarIcon: ({ focused, color, size }) => {
           let iconName;
@@ -69,7 +70,7 @@ function MainTabNavigator() {
 // Navegador de Stack principal que contiene todo
 function AppNavigator() {
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
+    <Stack.Navigator id={undefined} screenOptions={{ headerShown: false }}>
       <Stack.Screen name="Main" component={MainTabNavigator} />
       <Stack.Screen name="SpotDetail" component={SpotDetailScreen} />
       <Stack.Screen name="AddSpot" component={AddSpotScreen} />

@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { View, StyleSheet, Button, Alert, Platform, PermissionsAndroid, Switch, Text } from 'react-native';
 import MapView, { PROVIDER_GOOGLE, Marker } from 'react-native-maps';
-import { auth } from '../src/firebaseConfig';
 import rnFirebaseAuth from '@react-native-firebase/auth';
 import { useTranslation } from 'react-i18next';
 import Geolocation, { GeolocationResponse } from '@react-native-community/geolocation';
@@ -10,7 +9,6 @@ const HomeScreen = () => {
   const { t } = useTranslation();
   const [location, setLocation] = useState<GeolocationResponse | null>(null);
   const [isSatelliteMap, setIsSatelliteMap] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
     const requestLocationPermission = async () => {
@@ -37,7 +35,6 @@ const HomeScreen = () => {
           }
         } catch (err: any) {
           
-          setErrorMsg(err.message);
           Alert.alert(t('alerts.locationError'), err.message);
           return;
         }
