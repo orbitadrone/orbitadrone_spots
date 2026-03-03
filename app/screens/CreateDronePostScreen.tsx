@@ -4,7 +4,9 @@ import {
   Alert,
   BackHandler,
   Image,
+  Platform,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   TextInput,
@@ -18,6 +20,7 @@ import {useFocusEffect} from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Video from 'react-native-video';
 import RNFS from 'react-native-fs';
+import {useSafeAreaInsets} from 'react-native-safe-area-context';
 
 import {uploadFile} from '../../src/services/storageService';
 import {uploadVideoToBunny} from '../../src/services/bunnyStreamService';
@@ -197,6 +200,13 @@ const cleanupTempFiles = async (tempPaths: string[]) => {
 export default function CreateDronePostScreen({navigation}: {navigation: any}) {
   const {t} = useTranslation();
   const {user} = useAuthContext();
+  const insets = useSafeAreaInsets();
+  const topInset =
+    insets.top > 0
+      ? insets.top
+      : Platform.OS === 'android'
+        ? (StatusBar.currentHeight ?? 0)
+        : 0;
 
   const [text, setText] = useState('');
   const [images, setImages] = useState<LocalImageAsset[]>([]);
@@ -692,7 +702,7 @@ export default function CreateDronePostScreen({navigation}: {navigation: any}) {
 
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
+      <View style={[styles.header, {paddingTop: topInset + 10}]}>
         <TouchableOpacity onPress={confirmExit}>
           <Icon name="arrow-left" size={24} color={palette.textPrimary} />
         </TouchableOpacity>
@@ -810,7 +820,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#f3f6fb',
   },
   header: {
-    paddingTop: 14,
     paddingHorizontal: 14,
     paddingBottom: 10,
     flexDirection: 'row',
