@@ -78,6 +78,7 @@ type FeedRow =
 type FeedVideoModalInfo = {
   url: string;
   type: 'native' | 'bunny';
+  fallbackUrls?: string[];
 };
 
 const {height: SCREEN_HEIGHT, width: SCREEN_WIDTH} = Dimensions.get('window');
@@ -172,6 +173,19 @@ const getVideoPreviewImage = (post: UnifiedPost): string | null => {
     return videoUrl.replace(/\/playlist\.m3u8(\?.*)?$/, '/thumbnail.jpg');
   }
   return null;
+};
+
+const getBunnyMp4FallbackUrls = (videoUrl: string) => {
+  const trimmedUrl = videoUrl.trim();
+  if (!/\/playlist\.m3u8(\?|$)/i.test(trimmedUrl)) {
+    return [trimmedUrl];
+  }
+
+  const mp4_720 = trimmedUrl.replace(/\/playlist\.m3u8(\?.*)?$/i, '/play_720p.mp4');
+  const mp4_480 = trimmedUrl.replace(/\/playlist\.m3u8(\?.*)?$/i, '/play_480p.mp4');
+  const mp4_360 = trimmedUrl.replace(/\/playlist\.m3u8(\?.*)?$/i, '/play_360p.mp4');
+
+  return Array.from(new Set([mp4_720, mp4_480, mp4_360, trimmedUrl]));
 };
 
 const calculateDistanceKm = (
@@ -285,6 +299,8 @@ export default function FeedScreen() {
       sheetHeightValueRef.current = value;
       const nextPeekMode = value <= SHEET_PEEK_THRESHOLD;
       setIsPeekMode(prev => (prev === nextPeekMode ? prev : nextPeekMode));
+      const nextLayer: ActiveLayer = nextPeekMode ? 'map' : 'feed';
+      setActiveLayer(prev => (prev === nextLayer ? prev : nextLayer));
     });
     return () => {
       sheetHeight.removeListener(subscription);
@@ -342,12 +358,6 @@ export default function FeedScreen() {
           const nearest = snapPoints.reduce((prev, point) =>
             Math.abs(point - currentHeight) < Math.abs(prev - currentHeight) ? point : prev,
           );
-
-          if (nearest === SHEET_MIN_HEIGHT) {
-            setActiveLayer('map');
-          } else {
-            setActiveLayer('feed');
-          }
           animateSheetTo(nearest);
         },
       }),
@@ -572,10 +582,39 @@ export default function FeedScreen() {
         await ensureProfiles(userIds);
 
         if (shouldLoadSocial) {
-          const postIdsForLikes = [
-            ...dronePosts.map(post => post.id!),
-            ...validSpots.map(spot => getSpotPostDocId(spot.id!)),
-          ];
+          const spotPostIdBySpotId = new Map<string, string>();
+          validPosts.forEach(post => {
+            if (post.type === 'spot' && post.spotId && post.id) {
+              spotPostIdBySpotId.set(post.spotId, post.id);
+            }
+          });
+
+          const likeAliasesByPostId: Record<string, string[]> = {};
+          dronePosts.forEach(post => {
+            if (!post.id) {
+              return;
+            }
+            likeAliasesByPostId[post.id] = [post.id];
+          });
+          validSpots.forEach(spot => {
+            if (!spot.id) {
+              return;
+            }
+            const syntheticSpotPostId = getSpotPostDocId(spot.id);
+            const linkedSpotPostId = spotPostIdBySpotId.get(spot.id);
+            const unifiedSpotPostId = linkedSpotPostId ?? syntheticSpotPostId;
+            likeAliasesByPostId[unifiedSpotPostId] = Array.from(
+              new Set(
+                [unifiedSpotPostId, linkedSpotPostId, syntheticSpotPostId].filter(
+                  (value): value is string => Boolean(value),
+                ),
+              ),
+            );
+          });
+
+          const postIdsForLikes = Array.from(
+            new Set(Object.values(likeAliasesByPostId).flat()),
+          );
           try {
             const likeSummary = await withTimeout(
               getLikesForPosts(postIdsForLikes),
@@ -585,8 +624,21 @@ export default function FeedScreen() {
             if (requestId !== refreshRequestIdRef.current) {
               return;
             }
-            setLikeCountByPostId(likeSummary.countsByPostId);
-            setLikedByCurrentUser(likeSummary.likedByCurrentUser);
+            const mergedCountsByPostId: Record<string, number> = {};
+            const mergedLikedByCurrentUser: Record<string, boolean> = {};
+
+            Object.entries(likeAliasesByPostId).forEach(([postId, aliases]) => {
+              mergedCountsByPostId[postId] = aliases.reduce(
+                (sum, aliasPostId) => sum + (likeSummary.countsByPostId[aliasPostId] ?? 0),
+                0,
+              );
+              mergedLikedByCurrentUser[postId] = aliases.some(
+                aliasPostId => Boolean(likeSummary.likedByCurrentUser[aliasPostId]),
+              );
+            });
+
+            setLikeCountByPostId(mergedCountsByPostId);
+            setLikedByCurrentUser(mergedLikedByCurrentUser);
           } catch (likeError) {
             console.warn('[Feed][Load] likes failed', likeError);
             if (requestId !== refreshRequestIdRef.current) {
@@ -1105,17 +1157,32 @@ export default function FeedScreen() {
 
     if (isBunnyUrl && bunnyGuidMatch) {
       const guid = bunnyGuidMatch[1];
-      const embedUrl = `https://iframe.mediadelivery.net/embed/${BUNNY_LIBRARY_ID}/${guid}?autoplay=true`;
-      setVideoModalInfo({url: embedUrl, type: 'bunny'});
+      if (BUNNY_LIBRARY_ID) {
+        const embedUrl = `https://iframe.mediadelivery.net/embed/${BUNNY_LIBRARY_ID}/${guid}?autoplay=true`;
+        setVideoModalInfo({url: embedUrl, type: 'bunny'});
+        return;
+      }
+
+      const nativeCandidates = getBunnyMp4FallbackUrls(trimmedUrl);
+      setVideoModalInfo({
+        url: nativeCandidates[0],
+        type: 'native',
+        fallbackUrls: nativeCandidates.slice(1),
+      });
       return;
     }
 
     if (isDirectFile || !isBunnyUrl) {
-      setVideoModalInfo({url: trimmedUrl, type: 'native'});
+      setVideoModalInfo({url: trimmedUrl, type: 'native', fallbackUrls: []});
       return;
     }
 
-    setVideoModalInfo({url: trimmedUrl, type: 'native'});
+    const nativeCandidates = getBunnyMp4FallbackUrls(trimmedUrl);
+    setVideoModalInfo({
+      url: nativeCandidates[0],
+      type: 'native',
+      fallbackUrls: nativeCandidates.slice(1),
+    });
   };
 
   const renderPostCard = (post: UnifiedPost) => {
@@ -1667,11 +1734,38 @@ export default function FeedScreen() {
                 })()
               : (
                   <Video
+                    key={videoModalInfo.url}
                     source={{uri: videoModalInfo.url}}
                     style={styles.videoModalPlayer}
                     controls
                     paused={false}
                     resizeMode="contain"
+                    onError={playbackError => {
+                      console.warn('[Feed] modal video playback failed', {
+                        url: videoModalInfo.url,
+                        error: playbackError,
+                      });
+                      setVideoModalInfo(previous => {
+                        if (
+                          !previous ||
+                          previous.type !== 'native' ||
+                          !previous.fallbackUrls?.length
+                        ) {
+                          Alert.alert(t('alerts.error'), t('alerts.videoPlaybackError'));
+                          return previous;
+                        }
+                        const [nextUrl, ...rest] = previous.fallbackUrls;
+                        console.log('[Feed] trying video fallback source', {
+                          from: previous.url,
+                          to: nextUrl,
+                        });
+                        return {
+                          ...previous,
+                          url: nextUrl,
+                          fallbackUrls: rest,
+                        };
+                      });
+                    }}
                   />
                 )
           ) : null}

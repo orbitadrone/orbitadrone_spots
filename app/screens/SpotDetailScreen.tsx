@@ -12,14 +12,28 @@ import { useTranslation } from 'react-i18next';
 import { useAuthContext } from '../context/AuthContext';
 import { BUNNY_LIBRARY_ID } from '../../src/constants/bunnyEnv';
 import { buildSpotShareUrl } from '../../src/constants/links';
+import { palette, radii, shadows } from '../../src/constants/theme';
 
 const createReasonState = (options: Array<{ key: string }>) =>
   Object.fromEntries(options.map(option => [option.key, false])) as Record<string, boolean>;
 
+const getBunnyMp4FallbackUrls = (videoUrl: string) => {
+  const trimmedUrl = videoUrl.trim();
+  if (!/\/playlist\.m3u8(\?|$)/i.test(trimmedUrl)) {
+    return [trimmedUrl];
+  }
+
+  const mp4_720 = trimmedUrl.replace(/\/playlist\.m3u8(\?.*)?$/i, '/play_720p.mp4');
+  const mp4_480 = trimmedUrl.replace(/\/playlist\.m3u8(\?.*)?$/i, '/play_480p.mp4');
+  const mp4_360 = trimmedUrl.replace(/\/playlist\.m3u8(\?.*)?$/i, '/play_360p.mp4');
+
+  return Array.from(new Set([mp4_720, mp4_480, mp4_360, trimmedUrl]));
+};
+
 
 const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) => {
   const { t } = useTranslation();
-  const navigation = useNavigation();
+  const navigation = useNavigation<any>();
   const { spotId } = route.params;
   const [spot, setSpot] = useState<Spot | null>(null);
   const [reviews, setReviews] = useState<Review[]>([]);
@@ -30,7 +44,12 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
   
   // Estado unificado para el modal de video
   const [videoModalVisible, setVideoModalVisible] = useState(false);
-  const [currentVideoInfo, setCurrentVideoInfo] = useState<{ url: string; type: 'native' | 'bunny'; guid?: string } | null>(null);
+  const [currentVideoInfo, setCurrentVideoInfo] = useState<{
+    url: string;
+    type: 'native' | 'bunny';
+    guid?: string;
+    fallbackUrls?: string[];
+  } | null>(null);
   const [imageModalVisible, setImageModalVisible] = useState(false);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const spotReportOptions = useMemo(
@@ -106,10 +125,10 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
     try {
       await Linking.openURL(emailUrl);
       setSpotReportModalVisible(false);
-    } catch (error) {
+    } catch {
       Alert.alert(t('alerts.error'), t('alerts.emailNotSupported'));
     }
-  }, [spot, spotReportOptions, spotReportReasons, spotReportNotes]);
+  }, [spot, spotReportOptions, spotReportReasons, spotReportNotes, t]);
 
   const openReviewReportModal = useCallback((review: Review) => {
     setReviewReportTarget(review);
@@ -165,10 +184,10 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
     try {
       await Linking.openURL(emailUrl);
       closeReviewReportModal();
-    } catch (error) {
+    } catch {
       Alert.alert(t('alerts.error'), t('alerts.emailNotSupported'));
     }
-  }, [spot, reviewReportTarget, reviewReportOptions, reviewReportReasons, reviewReportNotes, reviewAuthors, closeReviewReportModal]);
+  }, [spot, reviewReportTarget, reviewReportOptions, reviewReportReasons, reviewReportNotes, reviewAuthors, closeReviewReportModal, t]);
 
   useFocusEffect(
     useCallback(() => {
@@ -274,9 +293,31 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
     if (type === 'email') {
       finalUrl = `mailto:${url}`;
     } else if (type === 'whatsapp') {
-      // Asegurarse de que el número no tenga caracteres extraños y tenga el código de país
-      const cleanNumber = url.replace(/[^0-9]/g, '');
-      finalUrl = `https://wa.me/${cleanNumber}`;
+      // Limpiar número, probar app y luego web sin quedarse en un canOpenURL falso
+      const cleanNumber = url.replace(/\D/g, '');
+      if (!cleanNumber || cleanNumber.length < 8) {
+        Alert.alert(t('alerts.error'), t('alerts.cannotOpenLink'));
+        return;
+      }
+      const appUrl = `whatsapp://send?phone=${cleanNumber}`;
+      const webUrl = `https://wa.me/${cleanNumber}`;
+      try {
+        const canOpenApp = await Linking.canOpenURL(appUrl);
+        if (canOpenApp) {
+          await Linking.openURL(appUrl);
+          return;
+        }
+      } catch (err) {
+        console.warn('[WhatsApp] canOpenURL failed', err);
+      }
+      try {
+        await Linking.openURL(webUrl);
+        return;
+      } catch (err) {
+        console.warn('[WhatsApp] fallback web failed', err);
+        Alert.alert(t('alerts.error'), t('alerts.cannotOpenLink'));
+        return;
+      }
     } else if (!url.startsWith('http')) {
       finalUrl = `https://${url}`;
     }
@@ -347,12 +388,24 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
 
     if (isBunnyUrl && bunnyGuidMatch) {
       const guid = bunnyGuidMatch[1];
-      const embedUrl = `https://iframe.mediadelivery.net/embed/${BUNNY_LIBRARY_ID}/${guid}?autoplay=false`;
-      console.log('[Video] using bunny embed', embedUrl);
+      if (BUNNY_LIBRARY_ID) {
+        const embedUrl = `https://iframe.mediadelivery.net/embed/${BUNNY_LIBRARY_ID}/${guid}?autoplay=false`;
+        console.log('[Video] using bunny embed', embedUrl);
+        setCurrentVideoInfo({
+          url: embedUrl,
+          type: 'bunny',
+          guid,
+        });
+        setVideoModalVisible(true);
+        return;
+      }
+
+      const nativeCandidates = getBunnyMp4FallbackUrls(trimmedUrl);
       setCurrentVideoInfo({
-        url: embedUrl,
-        type: 'bunny',
+        url: nativeCandidates[0],
+        type: 'native',
         guid,
+        fallbackUrls: nativeCandidates.slice(1),
       });
       setVideoModalVisible(true);
       return;
@@ -361,7 +414,14 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
     const shouldBeNative = isFirebaseUrl || isDirectFile || !isBunnyUrl;
     if (shouldBeNative) {
       console.log('[Video] using native player', trimmedUrl);
-      setCurrentVideoInfo({ url: trimmedUrl, type: 'native' });
+      const nativeCandidates = isBunnyUrl
+        ? getBunnyMp4FallbackUrls(trimmedUrl)
+        : [trimmedUrl];
+      setCurrentVideoInfo({
+        url: nativeCandidates[0],
+        type: 'native',
+        fallbackUrls: nativeCandidates.slice(1),
+      });
       setVideoModalVisible(true);
     }
   };
@@ -386,7 +446,7 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
   return (
     <ScrollView style={styles.container}>
       <TouchableOpacity onPress={() => navigation.goBack()} style={styles.closeButton}>
-        <Icon name="close" size={24} color="#fff" />
+        <Icon name="close" size={22} color={palette.textPrimary} />
       </TouchableOpacity>
       
       {spot.mainImage && (
@@ -525,24 +585,29 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
 
       {currentUser && spot.createdBy === currentUser.uid && (
         <View style={styles.adminActionsContainer}>
-          <View style={styles.adminButton}>
-            <Button 
-              title={t('spotDetail.editSpotButton')} 
-              onPress={() => navigation.navigate('AddSpot' as never, { spot: spot } as never)}
-            />
-          </View>
-          <View style={styles.adminButton}>
-            <Button title={t('spotDetail.deleteSpotButton')} color="red" onPress={handleDeleteSpot} />
-          </View>
+          <TouchableOpacity
+            style={[styles.manageButton, styles.manageButtonNeutral]}
+            onPress={() => navigation.navigate('AddSpot' as never, { spot: spot } as never)}
+          >
+            <Text style={styles.manageButtonText}>{t('spotDetail.editSpotButton')}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.manageButton, styles.manageButtonDanger]}
+            onPress={handleDeleteSpot}
+          >
+            <Text style={styles.manageButtonTextDanger}>{t('spotDetail.deleteSpotButton')}</Text>
+          </TouchableOpacity>
         </View>
       )}
 
       {currentUser && spot.createdBy !== currentUser.uid && (
         <View style={styles.improveButtonContainer}>
-          <Button 
-            title={t('spotDetail.improveSpotButton')} 
+          <TouchableOpacity
+            style={[styles.manageButton, styles.manageButtonNeutral]}
             onPress={() => navigation.navigate('AddSpot' as never, { originalSpot: spot } as never)}
-          />
+          >
+            <Text style={styles.manageButtonText}>{t('spotDetail.improveSpotButton')}</Text>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -789,6 +854,7 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
                 })()
               : (
                   <Video
+                    key={currentVideoInfo.url}
                     // Simple render log; full error handling is in onError below
                     onReadyForDisplay={() =>
                       console.log('[Video] render native', currentVideoInfo)
@@ -799,10 +865,26 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
                     resizeMode="contain"
                     onError={e => {
                       console.log('Video Error', e);
-                      Alert.alert(
-                        t('alerts.error'),
-                        `${t('alerts.videoPlaybackError')}\n\n${JSON.stringify(e)}`,
-                      );
+                      setCurrentVideoInfo(previous => {
+                        if (
+                          !previous ||
+                          previous.type !== 'native' ||
+                          !previous.fallbackUrls?.length
+                        ) {
+                          Alert.alert(t('alerts.error'), t('alerts.videoPlaybackError'));
+                          return previous;
+                        }
+                        const [nextUrl, ...rest] = previous.fallbackUrls;
+                        console.log('[Video] trying fallback source', {
+                          from: previous.url,
+                          to: nextUrl,
+                        });
+                        return {
+                          ...previous,
+                          url: nextUrl,
+                          fallbackUrls: rest,
+                        };
+                      });
                     }}
                   />
                 )
@@ -817,7 +899,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     padding: 16,
-    backgroundColor: '#fff',
+    backgroundColor: palette.backgroundLight,
   },
   loadingContainer: {
     flex: 1,
@@ -828,6 +910,7 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: 'bold',
     marginBottom: 8,
+    color: palette.textPrimary,
   },
   actionsContainer: {
     flexDirection: 'row',
@@ -837,7 +920,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     borderTopWidth: 1,
     borderBottomWidth: 1,
-    borderColor: '#eee',
+    borderColor: palette.borderLight,
   },
   actionButton: {
     flexDirection: 'row',
@@ -847,12 +930,13 @@ const styles = StyleSheet.create({
   actionButtonText: {
     marginLeft: 8,
     fontSize: 16,
-    color: '#007BFF',
+    color: palette.highlight,
     fontWeight: 'bold',
   },
   description: {
     fontSize: 16,
     marginBottom: 8,
+    color: palette.textSecondary,
   },
   addressContainer: {
     flexDirection: 'row',
@@ -861,7 +945,7 @@ const styles = StyleSheet.create({
   },
   addressText: {
     fontSize: 14,
-    color: 'gray',
+    color: palette.textSecondary,
     marginLeft: 8,
     flex: 1, // Para que el texto se ajuste si es muy largo
   },
@@ -884,19 +968,22 @@ const styles = StyleSheet.create({
   },
   reviewCountText: {
     fontSize: 16,
-    color: 'gray',
+    color: palette.textSecondary,
   },
   addReviewButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#f0f8ff',
+    backgroundColor: palette.backgroundCard,
     paddingVertical: 8,
     paddingHorizontal: 12,
-    borderRadius: 20,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: palette.borderLight,
+    ...shadows.subtle,
   },
   addReviewButtonText: {
     marginLeft: 8,
-    color: '#007BFF',
+    color: palette.highlight,
     fontWeight: 'bold',
   },
   creatorInfoContainer: {
@@ -921,6 +1008,7 @@ const styles = StyleSheet.create({
   creatorName: {
     fontSize: 16,
     fontWeight: 'bold',
+    color: palette.textPrimary,
   },
   socialIconsContainer: {
     flexDirection: 'row',
@@ -935,17 +1023,18 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: 'bold',
     marginBottom: 12,
+    color: palette.textPrimary,
   },
   galleryImage: {
     width: 120,
     height: 120,
-    borderRadius: 8,
+    borderRadius: radii.lg,
     marginRight: 10,
   },
   videoThumbnail: {
     width: '100%',
     height: 200,
-    borderRadius: 8,
+    borderRadius: radii.lg,
     backgroundColor: '#000',
   },
   playIconContainer: {
@@ -967,6 +1056,7 @@ const styles = StyleSheet.create({
   reviewsTitle: {
     fontSize: 22,
     fontWeight: 'bold',
+    color: palette.textPrimary,
   },
   addReviewTextButton: {
     flexDirection: 'row',
@@ -976,42 +1066,48 @@ const styles = StyleSheet.create({
   },
   addReviewTextButtonText: {
     marginLeft: 6,
-    color: '#007BFF',
+    color: palette.highlight,
     fontWeight: 'bold',
     fontSize: 14,
   },
   noReviewsContainer: {
-    backgroundColor: '#f0f8ff',
-    borderRadius: 8,
+    backgroundColor: palette.backgroundCard,
+    borderRadius: radii.lg,
     padding: 20,
     alignItems: 'center',
     marginVertical: 16,
+    borderWidth: 1,
+    borderColor: palette.borderLight,
+    ...shadows.subtle,
   },
   noReviewsTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#005a9e',
+    color: palette.textPrimary,
     marginTop: 12,
   },
   noReviewsText: {
     fontSize: 14,
-    color: 'gray',
+    color: palette.textSecondary,
     marginTop: 4,
     textAlign: 'center',
   },
   reviewCard: {
-    backgroundColor: '#f0f0f0',
+    backgroundColor: palette.backgroundCard,
     padding: 12,
-    borderRadius: 8,
+    borderRadius: radii.lg,
     marginBottom: 12,
+    borderWidth: 1,
+    borderColor: palette.borderLight,
+    ...shadows.subtle,
   },
   reviewAuthor: {
     fontWeight: 'bold',
     marginBottom: 4,
-    color: '#333',
+    color: palette.textPrimary,
   },
   reviewAuthorLink: {
-    color: '#007BFF',
+    color: palette.highlight,
     textDecorationLine: 'underline',
   },
   reviewRating: {
@@ -1020,7 +1116,7 @@ const styles = StyleSheet.create({
   },
   reviewText: {
     fontSize: 14,
-    color: '#444',
+    color: palette.textSecondary,
     lineHeight: 22,
   },
   reviewReportButton: {
@@ -1052,14 +1148,35 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-around',
     marginVertical: 10,
-  },
-  adminButton: {
-    flex: 1,
-    marginHorizontal: 5,
+    gap: 12,
   },
   improveButtonContainer: {
     marginTop: 10,
     marginBottom: 20,
+  },
+  manageButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: palette.borderLight,
+    backgroundColor: palette.backgroundCard,
+    alignItems: 'center',
+    ...shadows.subtle,
+  },
+  manageButtonNeutral: {
+    borderColor: palette.borderLight,
+  },
+  manageButtonDanger: {
+    borderColor: '#e53935',
+  },
+  manageButtonText: {
+    color: palette.textPrimary,
+    fontWeight: '600',
+  },
+  manageButtonTextDanger: {
+    color: '#e53935',
+    fontWeight: '600',
   },
   reportSpotContainer: {
     alignItems: 'flex-end',
@@ -1176,12 +1293,15 @@ const styles = StyleSheet.create({
   },
   closeButton: {
     position: 'absolute',
-    top: 10,
-    right: 10,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    top: 16,
+    right: 16,
+    backgroundColor: palette.backgroundCard,
     padding: 8,
-    borderRadius: 20,
+    borderRadius: radii.lg,
     zIndex: 1,
+    borderWidth: 1,
+    borderColor: palette.borderLight,
+    ...shadows.subtle,
   },
   modalContainer: {
     flex: 1,

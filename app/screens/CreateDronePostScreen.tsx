@@ -127,11 +127,6 @@ const getMediaExtension = (
   return fallback;
 };
 
-const buildCacheFilePath = (prefix: string, extension: string) =>
-  `${RNFS.CachesDirectoryPath}/${prefix}_${Date.now()}_${Math.floor(
-    Math.random() * 1e6,
-  )}.${extension}`;
-
 const normalizeDraftImages = (value: unknown): LocalImageAsset[] => {
   if (!Array.isArray(value)) {
     return [];
@@ -157,27 +152,27 @@ const normalizeDraftImages = (value: unknown): LocalImageAsset[] => {
 
 const prepareUploadableUri = async ({
   uri,
-  fileName,
-  mimeType,
-  fallbackExtension,
+  // Reserved for future normalization paths.
+  fileName: _fileName,
+  mimeType: _mimeType,
+  fallbackExtension: _fallbackExtension,
 }: {
   uri: string;
   fileName?: string | null;
   mimeType?: string | null;
-  fallbackExtension: string;
+  fallbackExtension?: string;
 }): Promise<{uploadUri: string; tempPath: string | null}> => {
   const normalizedUri = ensureFileLikeUri(uri);
   if (!normalizedUri) {
     throw new Error('Invalid media URI');
   }
-  if (!normalizedUri.startsWith('content://')) {
+  // Keep content:// URIs as-is to avoid expensive pre-copy on large videos.
+  // RN Firebase Storage and multipart uploads can consume them on modern Android.
+  if (normalizedUri.startsWith('content://')) {
     return {uploadUri: normalizedUri, tempPath: null};
   }
 
-  const extension = getMediaExtension(fileName, mimeType, fallbackExtension);
-  const localPath = buildCacheFilePath('create_drone_post', extension);
-  await RNFS.copyFile(normalizedUri, localPath);
-  return {uploadUri: `file://${localPath}`, tempPath: localPath};
+  return {uploadUri: normalizedUri, tempPath: null};
 };
 
 const cleanupTempFiles = async (tempPaths: string[]) => {

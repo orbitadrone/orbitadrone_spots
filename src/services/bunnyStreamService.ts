@@ -3,7 +3,8 @@ import { getFreshIdToken } from './authSession';
 import { uploadFile } from './storageService';
 
 const BUNNY_UPLOAD_ENDPOINT = RAW_UPLOAD_ENDPOINT?.trim();
-const UPLOAD_TIMEOUT_MS = 10 * 60 * 1000;
+const UPLOAD_TIMEOUT_MS = 4 * 60 * 1000;
+const BACKEND_HEALTH_TIMEOUT_MS = 5000;
 
 type BunnyUploadErrorCode =
   | 'bunny/auth-required'
@@ -42,6 +43,47 @@ const sanitizeFileName = (value: string) =>
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, '_')
     .replace(/^_+|_+$/g, '');
+
+const getBackendHealthUrl = () => {
+  if (!BUNNY_UPLOAD_ENDPOINT) {
+    return '';
+  }
+  if (/\/bunny\/upload\/?$/i.test(BUNNY_UPLOAD_ENDPOINT)) {
+    return BUNNY_UPLOAD_ENDPOINT.replace(/\/bunny\/upload\/?$/i, '/health');
+  }
+  return `${BUNNY_UPLOAD_ENDPOINT.replace(/\/$/, '')}/health`;
+};
+
+const ensureBackendReachable = async () => {
+  const healthUrl = getBackendHealthUrl();
+  if (!healthUrl) {
+    return;
+  }
+
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(), BACKEND_HEALTH_TIMEOUT_MS);
+  try {
+    const response = await fetch(healthUrl, {
+      method: 'GET',
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw buildUploadError(
+        `[Bunny] Upload backend healthcheck failed (${response.status}).`,
+        'bunny/network',
+        response.status,
+      );
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw buildUploadError(
+      `[Bunny] Upload backend is unreachable: ${message}`,
+      'bunny/network',
+    );
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+};
 
 const shouldFallbackToStorage = (error: unknown) => {
   const code = String((error as any)?.code ?? '').toLowerCase();
@@ -105,6 +147,8 @@ export const uploadVideoToBunny = async ({
       title,
     });
   }
+
+  await ensureBackendReachable();
 
   const fd = new FormData();
   fd.append('file', {
