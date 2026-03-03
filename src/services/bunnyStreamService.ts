@@ -121,12 +121,14 @@ export const uploadVideoToBunny = async ({
   contentType,
   title,
   onProgress,
+  fallbackStoragePrefix = 'drone_posts',
 }: {
   uri: string;
   name?: string;
   contentType?: string;
   title?: string;
   onProgress?: (payload: { loaded: number; total: number }) => void;
+  fallbackStoragePrefix?: string;
 }) => {
   if (!uri) {
     throw new Error('No video uri provided for Bunny upload.');
@@ -163,7 +165,10 @@ export const uploadVideoToBunny = async ({
 
   let idToken = '';
   try {
-    idToken = await getFreshIdToken('bunny_upload', {forceRefresh: true});
+    idToken = await getFreshIdToken('bunny_upload', {
+      forceRefresh: true,
+      timeoutMs: 15000,
+    });
   } catch (tokenError) {
     console.warn('[Bunny] Missing valid auth token for upload', tokenError);
     throw buildUploadError(
@@ -284,7 +289,8 @@ export const uploadVideoToBunny = async ({
 
     try {
       const cleanName = sanitizeFileName(name ?? 'upload.mp4') || `video_${Date.now()}.mp4`;
-      const storagePath = `video_fallback/${Date.now()}_${cleanName}`;
+      const cleanPrefix = sanitizeFileName(fallbackStoragePrefix) || 'drone_posts';
+      const storagePath = `${cleanPrefix}/${Date.now()}_${cleanName}`;
       const playbackUrl = await uploadFile(
         uri,
         storagePath,

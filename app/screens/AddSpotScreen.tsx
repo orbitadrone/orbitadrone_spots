@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, Button, StyleSheet, Alert, ActivityIndicator, Image, TouchableOpacity, ScrollView, Linking, Modal } from 'react-native';
+import { View, Text, TextInput, StyleSheet, Alert, ActivityIndicator, Image, TouchableOpacity, ScrollView, Linking, Modal } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { addSpot, updateSpot, Spot, deleteSpot } from '../../src/services/firestoreService';
 import { uploadImage } from '../../src/services/storageService';
@@ -431,6 +431,7 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
               title: spotName || 'Orbitadrone Spot',
               name: videoMeta?.name || `${spotName.replace(/\s/g, '_') || 'spot'}_${Date.now()}.mp4`,
               contentType: videoMeta?.type || 'video/mp4',
+              fallbackStoragePrefix: 'spot_images',
               onProgress: ({ loaded, total }) => {
                 if (total && total > 0) {
                   setVideoUploadProgress(Math.min(loaded / total, 1));
@@ -452,11 +453,10 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
               errorStatus === 403 ||
               errorCode.includes('auth') ||
               errorCode.includes('unauthorized') ||
-              errorCode.includes('permission-denied') ||
               rawMessage.includes('unauth') ||
               rawMessage.includes('token') ||
               rawMessage.includes('unauthorized') ||
-              rawMessage.includes('permission');
+              rawMessage.includes('auth token');
             const isNetworkUploadError =
               errorCode.includes('network') ||
               errorCode.includes('timeout') ||

@@ -608,6 +608,7 @@ export default function CreateDronePostScreen({navigation}: {navigation: any}) {
           name: videoName ?? 'drone-post-video.mp4',
           contentType: videoType ?? 'video/mp4',
           title: text.trim() || videoName || 'drone-post-video',
+          fallbackStoragePrefix: 'drone_posts',
           onProgress: payload => {
             const ratio = payload.total > 0 ? payload.loaded / payload.total : 0;
             const bounded = Math.max(0, Math.min(1, ratio));
@@ -657,11 +658,10 @@ export default function CreateDronePostScreen({navigation}: {navigation: any}) {
         errorStatus === 403 ||
         errorCode.includes('auth') ||
         errorCode.includes('unauthorized') ||
-        errorCode.includes('permission-denied') ||
         rawMessage.includes('usuario no autenticado') ||
         rawMessage.includes('unauth') ||
         rawMessage.includes('unauthorized') ||
-        rawMessage.includes('permission');
+        rawMessage.includes('auth token');
       const isUploadError =
         currentStep !== 'create_post' ||
         errorCode.includes('bunny/') ||

@@ -50,7 +50,6 @@ import {
   togglePostLike,
 } from '../../src/services/socialService';
 import {feedBannerAdUnitId} from '../../src/constants/adUnits';
-import {BUNNY_LIBRARY_ID} from '../../src/constants/bunnyEnv';
 import {requestLocationPermission} from '../../src/utils/permissions';
 import {palette, shadows} from '../../src/constants/theme';
 
@@ -74,12 +73,6 @@ type UnifiedPost = {
 type FeedRow =
   | {kind: 'post'; post: UnifiedPost}
   | {kind: 'ad'; id: string};
-
-type FeedVideoModalInfo = {
-  url: string;
-  type: 'native' | 'bunny';
-  fallbackUrls?: string[];
-};
 
 const {height: SCREEN_HEIGHT, width: SCREEN_WIDTH} = Dimensions.get('window');
 
@@ -255,6 +248,10 @@ export default function FeedScreen() {
   const [savingRatingBySpotId, setSavingRatingBySpotId] = useState<Record<string, boolean>>({});
   const [savingLikeByPostId, setSavingLikeByPostId] = useState<Record<string, boolean>>({});
   const [playingVideoPostId, setPlayingVideoPostId] = useState<string | null>(null);
+  const [endedVideoByPostId, setEndedVideoByPostId] = useState<Record<string, boolean>>({});
+  const [videoSourceByPostId, setVideoSourceByPostId] = useState<
+    Record<string, {url: string; fallbackUrls: string[]}>
+  >({});
 
   const [expandedTextByPostId, setExpandedTextByPostId] = useState<Record<string, boolean>>({});
   const [visibleRows, setVisibleRows] = useState(12);
@@ -269,8 +266,8 @@ export default function FeedScreen() {
     Record<string, boolean>
   >({});
   const [commentsModalPostId, setCommentsModalPostId] = useState<string | null>(null);
-  const [videoModalInfo, setVideoModalInfo] = useState<FeedVideoModalInfo | null>(null);
   const playingVideoPostIdRef = useRef<string | null>(null);
+  const endedVideoByPostIdRef = useRef<Record<string, boolean>>({});
 
   useEffect(() => {
     spotsRef.current = spots;
@@ -287,6 +284,10 @@ export default function FeedScreen() {
   useEffect(() => {
     playingVideoPostIdRef.current = playingVideoPostId;
   }, [playingVideoPostId]);
+
+  useEffect(() => {
+    endedVideoByPostIdRef.current = endedVideoByPostId;
+  }, [endedVideoByPostId]);
 
   const sheetHeight = useRef(new Animated.Value(SHEET_MID_HEIGHT)).current;
   const sheetHeightValueRef = useRef(SHEET_MID_HEIGHT);
@@ -329,6 +330,12 @@ export default function FeedScreen() {
     animateSheetTo(SHEET_MID_HEIGHT);
   };
 
+  const switchToMapTab = useCallback(() => {
+    requestAnimationFrame(() => {
+      navigation.navigate('Map');
+    });
+  }, [navigation]);
+
   const switchToMapLayer = () => {
     setActiveLayer('map');
     animateSheetTo(SHEET_MIN_HEIGHT);
@@ -359,9 +366,12 @@ export default function FeedScreen() {
             Math.abs(point - currentHeight) < Math.abs(prev - currentHeight) ? point : prev,
           );
           animateSheetTo(nearest);
+          if (nearest === SHEET_MIN_HEIGHT) {
+            switchToMapTab();
+          }
         },
       }),
-    [animateSheetTo, sheetHeight],
+    [animateSheetTo, sheetHeight, switchToMapTab],
   );
 
   const ensureProfiles = useCallback(
@@ -1139,50 +1149,16 @@ export default function FeedScreen() {
     navigation.navigate('SpotDetail', {spotId});
   };
 
-  const openVideoModal = (url: string) => {
-    const trimmedUrl = url?.trim();
-    if (!trimmedUrl) {
-      return;
+  const getInlineVideoSource = (post: UnifiedPost) => {
+    const existing = videoSourceByPostId[post.id];
+    if (existing) {
+      return existing;
     }
-
-    const bunnyGuidMatch = trimmedUrl.match(
-      /\/([0-9a-fA-F-]{36})(?:\/[^/]*)?(?:\?|$)/,
-    );
-    const isBunnyUrl =
-      trimmedUrl.includes('.b-cdn.net') ||
-      trimmedUrl.includes('video.bunnycdn.com') ||
-      /\.m3u8(\?|$)/i.test(trimmedUrl) ||
-      !!bunnyGuidMatch;
-    const isDirectFile = /\.(mp4|mov|m4v|webm)(\?|$)/i.test(trimmedUrl);
-
-    if (isBunnyUrl && bunnyGuidMatch) {
-      const guid = bunnyGuidMatch[1];
-      if (BUNNY_LIBRARY_ID) {
-        const embedUrl = `https://iframe.mediadelivery.net/embed/${BUNNY_LIBRARY_ID}/${guid}?autoplay=true`;
-        setVideoModalInfo({url: embedUrl, type: 'bunny'});
-        return;
-      }
-
-      const nativeCandidates = getBunnyMp4FallbackUrls(trimmedUrl);
-      setVideoModalInfo({
-        url: nativeCandidates[0],
-        type: 'native',
-        fallbackUrls: nativeCandidates.slice(1),
-      });
-      return;
-    }
-
-    if (isDirectFile || !isBunnyUrl) {
-      setVideoModalInfo({url: trimmedUrl, type: 'native', fallbackUrls: []});
-      return;
-    }
-
-    const nativeCandidates = getBunnyMp4FallbackUrls(trimmedUrl);
-    setVideoModalInfo({
-      url: nativeCandidates[0],
-      type: 'native',
-      fallbackUrls: nativeCandidates.slice(1),
-    });
+    const urls = post.videoUrl ? getBunnyMp4FallbackUrls(post.videoUrl) : [];
+    return {
+      url: urls[0] ?? '',
+      fallbackUrls: urls.slice(1),
+    };
   };
 
   const renderPostCard = (post: UnifiedPost) => {
@@ -1198,8 +1174,10 @@ export default function FeedScreen() {
     const shouldCollapse = postText.length > 180;
     const liked = Boolean(likedByCurrentUser[post.id]);
     const videoPreviewUri = post.videoUrl ? getVideoPreviewImage(post) : null;
-    const isInlinePlayableVideo = Boolean(post.videoUrl) && post.type === 'drone';
-    const isVideoPlaying = isInlinePlayableVideo && playingVideoPostId === post.id;
+    const hasVideo = Boolean(post.videoUrl);
+    const inlineVideoSource = hasVideo ? getInlineVideoSource(post) : null;
+    const isVideoPlaying = hasVideo && playingVideoPostId === post.id;
+    const hasVideoEnded = Boolean(endedVideoByPostId[post.id]);
 
     const userSpotRating =
       post.type === 'spot'
@@ -1223,74 +1201,80 @@ export default function FeedScreen() {
         </View>
 
         <View style={styles.mediaFrame}>
-          {post.videoUrl ? (
-            post.type === 'spot' ? (
-              <Pressable
-                style={styles.videoPressable}
-                onPress={() => {
-                  setPlayingVideoPostId(null);
-                  openVideoModal(post.videoUrl!);
-                }}>
-                {videoPreviewUri ? (
-                  <Image source={{uri: videoPreviewUri}} style={styles.imageView} />
-                ) : (
-                  <View style={styles.mediaFallback}>
-                    <Icon name="video-off-outline" size={24} color={palette.textMuted} />
-                    <Text style={styles.mediaFallbackText}>{t('feed.video')}</Text>
-                  </View>
-                )}
-                <View style={styles.videoPill}>
-                  <Icon name="play-circle" size={18} color="#fff" />
-                  <Text style={styles.videoPillText}>{t('feed.video')}</Text>
+          {hasVideo && inlineVideoSource?.url ? (
+            <Pressable
+              style={styles.videoPressable}
+              onPress={() => {
+                if (hasVideoEnded) {
+                  setEndedVideoByPostId(prev => ({...prev, [post.id]: false}));
+                  setPlayingVideoPostId(post.id);
+                  return;
+                }
+                setPlayingVideoPostId(prev => (prev === post.id ? null : post.id));
+              }}>
+              {isVideoPlaying ? (
+                <Video
+                  key={`${post.id}-${inlineVideoSource.url}`}
+                  source={{uri: inlineVideoSource.url}}
+                  style={styles.videoView}
+                  resizeMode="cover"
+                  paused={false}
+                  muted={false}
+                  repeat={false}
+                  controls={false}
+                  onEnd={() => {
+                    setEndedVideoByPostId(prev => ({...prev, [post.id]: true}));
+                    setPlayingVideoPostId(prev => (prev === post.id ? null : prev));
+                  }}
+                  onError={playbackError => {
+                    console.warn('[Feed] inline video playback failed', {
+                      postId: post.id,
+                      source: inlineVideoSource.url,
+                      error: playbackError,
+                    });
+                    setVideoSourceByPostId(previous => {
+                      const existing = previous[post.id] ?? inlineVideoSource;
+                      if (!existing.fallbackUrls.length) {
+                        Alert.alert(t('alerts.error'), t('alerts.videoPlaybackError'));
+                        return previous;
+                      }
+                      const [nextUrl, ...rest] = existing.fallbackUrls;
+                      return {
+                        ...previous,
+                        [post.id]: {
+                          url: nextUrl,
+                          fallbackUrls: rest,
+                        },
+                      };
+                    });
+                    setEndedVideoByPostId(prev => ({...prev, [post.id]: false}));
+                    setPlayingVideoPostId(post.id);
+                  }}
+                />
+              ) : videoPreviewUri ? (
+                <Image source={{uri: videoPreviewUri}} style={styles.imageView} />
+              ) : (
+                <View style={styles.mediaFallback}>
+                  <Icon name="video-off-outline" size={24} color={palette.textMuted} />
+                  <Text style={styles.mediaFallbackText}>{t('feed.video')}</Text>
                 </View>
-                <View style={styles.videoTogglePill}>
-                  <Icon name="open-in-new" size={17} color="#fff" />
-                </View>
-              </Pressable>
-            ) : (
-              <Pressable
-                style={styles.videoPressable}
-                onPress={() =>
-                  setPlayingVideoPostId(prev => (prev === post.id ? null : post.id))
-                }>
-                {isVideoPlaying ? (
-                  <Video
-                    source={{uri: post.videoUrl}}
-                    style={styles.videoView}
-                    resizeMode="cover"
-                    paused={false}
-                    muted
-                    repeat
-                    controls={false}
-                    onError={playbackError => {
-                      console.warn('[Feed] video playback failed', {
-                        postId: post.id,
-                        error: playbackError,
-                      });
-                      setPlayingVideoPostId(null);
-                    }}
-                  />
-                ) : videoPreviewUri ? (
-                  <Image source={{uri: videoPreviewUri}} style={styles.imageView} />
-                ) : (
-                  <View style={styles.mediaFallback}>
-                    <Icon name="video-off-outline" size={24} color={palette.textMuted} />
-                    <Text style={styles.mediaFallbackText}>{t('feed.video')}</Text>
-                  </View>
-                )}
-                <View style={styles.videoPill}>
-                  <Icon name="play-circle" size={18} color="#fff" />
-                  <Text style={styles.videoPillText}>{t('feed.video')}</Text>
-                </View>
-                <View style={styles.videoTogglePill}>
-                  <Icon
-                    name={isVideoPlaying ? 'pause-circle' : 'play-circle'}
-                    size={18}
-                    color="#fff"
-                  />
-                </View>
-              </Pressable>
-            )
+              )}
+              <View style={styles.videoPill}>
+                <Icon
+                  name={hasVideoEnded ? 'replay' : 'play-circle'}
+                  size={18}
+                  color="#fff"
+                />
+                <Text style={styles.videoPillText}>{t('feed.video')}</Text>
+              </View>
+              <View style={styles.videoTogglePill}>
+                <Icon
+                  name={isVideoPlaying ? 'pause-circle' : 'play-circle'}
+                  size={18}
+                  color="#fff"
+                />
+              </View>
+            </Pressable>
           ) : post.images.length ? (
             <Image source={{uri: post.images[0]}} style={styles.imageView} />
           ) : (
@@ -1476,21 +1460,34 @@ export default function FeedScreen() {
     itemVisiblePercentThreshold: 45,
   });
 
-  const onViewableItemsChanged = useRef(
+  const onViewableItemsChanged = useCallback(
     ({viewableItems}: {viewableItems: Array<ViewToken>}) => {
-      const currentPlayingId = playingVideoPostIdRef.current;
-      if (!currentPlayingId) {
+      if (activeLayer !== 'feed' || isPeekMode) {
+        setPlayingVideoPostId(null);
         return;
       }
-      const isPlayingPostVisible = viewableItems.some(viewable => {
-        const row = viewable.item as FeedRow | undefined;
-        return row?.kind === 'post' && row.post.id === currentPlayingId;
-      });
-      if (!isPlayingPostVisible) {
+
+      const visibleVideoPost = viewableItems
+        .map(viewable => viewable.item as FeedRow | undefined)
+        .find(row => row?.kind === 'post' && Boolean(row.post.videoUrl));
+
+      if (!visibleVideoPost || visibleVideoPost.kind !== 'post') {
         setPlayingVideoPostId(null);
+        return;
+      }
+
+      const nextPostId = visibleVideoPost.post.id;
+      if (endedVideoByPostIdRef.current[nextPostId]) {
+        setPlayingVideoPostId(null);
+        return;
+      }
+
+      if (playingVideoPostIdRef.current !== nextPostId) {
+        setPlayingVideoPostId(nextPostId);
       }
     },
-  ).current;
+    [activeLayer, isPeekMode],
+  );
 
   useEffect(() => {
     if (activeLayer !== 'feed' || isPeekMode) {
@@ -1501,6 +1498,21 @@ export default function FeedScreen() {
   useEffect(() => {
     setPlayingVideoPostId(null);
   }, [feedTab]);
+
+  useEffect(() => {
+    if (loading || activeLayer !== 'feed' || isPeekMode || playingVideoPostId) {
+      return;
+    }
+    const firstVisibleVideo = visibleRowsData.find(
+      row =>
+        row.kind === 'post' &&
+        Boolean(row.post.videoUrl) &&
+        !endedVideoByPostId[row.post.id],
+    );
+    if (firstVisibleVideo?.kind === 'post') {
+      setPlayingVideoPostId(firstVisibleVideo.post.id);
+    }
+  }, [activeLayer, endedVideoByPostId, isPeekMode, loading, playingVideoPostId, visibleRowsData]);
 
   return (
     <View style={styles.container}>
@@ -1699,78 +1711,6 @@ export default function FeedScreen() {
         </View>
       </Modal>
 
-      <Modal
-        animationType="slide"
-        transparent={false}
-        visible={Boolean(videoModalInfo)}
-        onRequestClose={() => setVideoModalInfo(null)}>
-        <View style={styles.videoModalContainer}>
-          <TouchableOpacity
-            style={styles.videoModalCloseButton}
-            onPress={() => setVideoModalInfo(null)}>
-            <Icon name="close" size={30} color="#fff" />
-          </TouchableOpacity>
-
-          {videoModalInfo ? (
-            videoModalInfo.type === 'bunny'
-              ? (() => {
-                  const {WebView} = require('react-native-webview');
-                  return (
-                    <WebView
-                      style={styles.videoWebview}
-                      javaScriptEnabled
-                      domStorageEnabled
-                      allowsFullscreenVideo
-                      allowsInlineMediaPlayback
-                      mediaPlaybackRequiresUserAction={false}
-                      originWhitelist={['*']}
-                      source={{uri: videoModalInfo.url}}
-                      thirdPartyCookiesEnabled={false}
-                      javaScriptCanOpenWindowsAutomatically={false}
-                      setSupportMultipleWindows={false}
-                      mixedContentMode="never"
-                    />
-                  );
-                })()
-              : (
-                  <Video
-                    key={videoModalInfo.url}
-                    source={{uri: videoModalInfo.url}}
-                    style={styles.videoModalPlayer}
-                    controls
-                    paused={false}
-                    resizeMode="contain"
-                    onError={playbackError => {
-                      console.warn('[Feed] modal video playback failed', {
-                        url: videoModalInfo.url,
-                        error: playbackError,
-                      });
-                      setVideoModalInfo(previous => {
-                        if (
-                          !previous ||
-                          previous.type !== 'native' ||
-                          !previous.fallbackUrls?.length
-                        ) {
-                          Alert.alert(t('alerts.error'), t('alerts.videoPlaybackError'));
-                          return previous;
-                        }
-                        const [nextUrl, ...rest] = previous.fallbackUrls;
-                        console.log('[Feed] trying video fallback source', {
-                          from: previous.url,
-                          to: nextUrl,
-                        });
-                        return {
-                          ...previous,
-                          url: nextUrl,
-                          fallbackUrls: rest,
-                        };
-                      });
-                    }}
-                  />
-                )
-          ) : null}
-        </View>
-      </Modal>
     </View>
   );
 }
@@ -2232,25 +2172,5 @@ const styles = StyleSheet.create({
     borderBottomColor: '#edf2f7',
     paddingVertical: 8,
     gap: 2,
-  },
-  videoModalContainer: {
-    flex: 1,
-    backgroundColor: '#000',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  videoModalCloseButton: {
-    position: 'absolute',
-    top: 16,
-    right: 16,
-    zIndex: 2,
-  },
-  videoModalPlayer: {
-    width: '100%',
-    height: '100%',
-  },
-  videoWebview: {
-    width: '100%',
-    height: '100%',
   },
 });
