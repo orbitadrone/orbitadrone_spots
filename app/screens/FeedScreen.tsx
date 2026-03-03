@@ -315,7 +315,7 @@ export default function FeedScreen() {
     () =>
       PanResponder.create({
         onMoveShouldSetPanResponder: (_, gestureState) =>
-          activeLayer === 'feed' && Math.abs(gestureState.dy) > 8,
+          Math.abs(gestureState.dy) > 8,
         onPanResponderGrant: () => {
           panStartHeightRef.current = sheetHeightValueRef.current;
         },
@@ -327,10 +327,6 @@ export default function FeedScreen() {
           sheetHeight.setValue(nextHeight);
         },
         onPanResponderRelease: (_, gestureState) => {
-          if (activeLayer !== 'feed') {
-            return;
-          }
-
           const currentHeight = Math.max(
             SHEET_MIN_HEIGHT,
             Math.min(SHEET_MAX_HEIGHT, panStartHeightRef.current - gestureState.dy),
@@ -339,10 +335,16 @@ export default function FeedScreen() {
           const nearest = snapPoints.reduce((prev, point) =>
             Math.abs(point - currentHeight) < Math.abs(prev - currentHeight) ? point : prev,
           );
+
+          if (nearest === SHEET_MIN_HEIGHT) {
+            setActiveLayer('map');
+          } else {
+            setActiveLayer('feed');
+          }
           animateSheetTo(nearest);
         },
       }),
-    [activeLayer, animateSheetTo, sheetHeight],
+    [animateSheetTo, sheetHeight],
   );
 
   const ensureProfiles = useCallback(
