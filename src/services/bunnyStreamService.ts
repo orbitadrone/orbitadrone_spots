@@ -46,11 +46,16 @@ const sanitizeFileName = (value: string) =>
 const shouldFallbackToStorage = (error: unknown) => {
   const code = String((error as any)?.code ?? '').toLowerCase();
   const status = Number((error as any)?.status ?? 0);
+  if (!code) {
+    return true;
+  }
+  if (code === 'bunny/fallback-failed') {
+    return false;
+  }
   return (
-    code === 'bunny/auth-required' ||
-    code === 'bunny/auth-rejected' ||
-    status === 401 ||
-    status === 403
+    code.startsWith('bunny/') ||
+    code.startsWith('storage/') ||
+    status >= 400
   );
 };
 
@@ -247,10 +252,15 @@ export const uploadVideoToBunny = async ({
       };
     } catch (fallbackError) {
       console.error('[Bunny] Storage fallback failed', fallbackError);
-      throw buildUploadError(
-        '[Bunny] Storage fallback failed.',
-        'bunny/fallback-failed',
-      );
+      const fallbackCode = String((fallbackError as any)?.code ?? '').toLowerCase();
+      if (fallbackCode) {
+        const enrichedError = fallbackError instanceof Error
+          ? fallbackError
+          : new Error('[Bunny] Storage fallback failed.');
+        (enrichedError as any).code = fallbackCode;
+        throw enrichedError;
+      }
+      throw buildUploadError('[Bunny] Storage fallback failed.', 'bunny/fallback-failed');
     }
   }
 };

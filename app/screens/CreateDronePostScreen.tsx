@@ -651,8 +651,12 @@ export default function CreateDronePostScreen({navigation}: {navigation: any}) {
         errorStatus === 401 ||
         errorStatus === 403 ||
         errorCode.includes('auth') ||
+        errorCode.includes('unauthorized') ||
+        errorCode.includes('permission-denied') ||
         rawMessage.includes('usuario no autenticado') ||
-        rawMessage.includes('unauth');
+        rawMessage.includes('unauth') ||
+        rawMessage.includes('unauthorized') ||
+        rawMessage.includes('permission');
       const isUploadError =
         currentStep !== 'create_post' ||
         errorCode.includes('bunny/') ||
@@ -660,9 +664,18 @@ export default function CreateDronePostScreen({navigation}: {navigation: any}) {
         rawMessage.includes('upload') ||
         rawMessage.includes('storage') ||
         rawMessage.includes('timeout');
+      const isNetworkUploadError =
+        errorCode.includes('network') ||
+        errorCode.includes('timeout') ||
+        errorCode.includes('retry') ||
+        errorCode.includes('unavailable') ||
+        rawMessage.includes('network') ||
+        rawMessage.includes('timed out') ||
+        rawMessage.includes('timeout') ||
+        rawMessage.includes('connection');
       const message = isAuthError
         ? t('alerts.reauthFailedError')
-        : isUploadError
+        : isUploadError && isNetworkUploadError
           ? t('alerts.videoUploadError')
           : t('feed.postPublishError');
       console.warn('[CreateDronePost] publish error classified', {
@@ -671,6 +684,7 @@ export default function CreateDronePostScreen({navigation}: {navigation: any}) {
         errorStatus,
         isAuthError,
         isUploadError,
+        isNetworkUploadError,
       });
       setLastErrorMessage(message);
       Alert.alert(t('alerts.error'), message);

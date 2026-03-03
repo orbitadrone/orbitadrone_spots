@@ -50,6 +50,7 @@ import {
   togglePostLike,
 } from '../../src/services/socialService';
 import {feedBannerAdUnitId} from '../../src/constants/adUnits';
+import {BUNNY_LIBRARY_ID} from '../../src/constants/bunnyEnv';
 import {requestLocationPermission} from '../../src/utils/permissions';
 import {palette, shadows} from '../../src/constants/theme';
 
@@ -73,6 +74,11 @@ type UnifiedPost = {
 type FeedRow =
   | {kind: 'post'; post: UnifiedPost}
   | {kind: 'ad'; id: string};
+
+type FeedVideoModalInfo = {
+  url: string;
+  type: 'native' | 'bunny';
+};
 
 const {height: SCREEN_HEIGHT, width: SCREEN_WIDTH} = Dimensions.get('window');
 
@@ -249,6 +255,7 @@ export default function FeedScreen() {
     Record<string, boolean>
   >({});
   const [commentsModalPostId, setCommentsModalPostId] = useState<string | null>(null);
+  const [videoModalInfo, setVideoModalInfo] = useState<FeedVideoModalInfo | null>(null);
   const playingVideoPostIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -1080,6 +1087,37 @@ export default function FeedScreen() {
     navigation.navigate('SpotDetail', {spotId});
   };
 
+  const openVideoModal = (url: string) => {
+    const trimmedUrl = url?.trim();
+    if (!trimmedUrl) {
+      return;
+    }
+
+    const bunnyGuidMatch = trimmedUrl.match(
+      /\/([0-9a-fA-F-]{36})(?:\/[^/]*)?(?:\?|$)/,
+    );
+    const isBunnyUrl =
+      trimmedUrl.includes('.b-cdn.net') ||
+      trimmedUrl.includes('video.bunnycdn.com') ||
+      /\.m3u8(\?|$)/i.test(trimmedUrl) ||
+      !!bunnyGuidMatch;
+    const isDirectFile = /\.(mp4|mov|m4v|webm)(\?|$)/i.test(trimmedUrl);
+
+    if (isBunnyUrl && bunnyGuidMatch) {
+      const guid = bunnyGuidMatch[1];
+      const embedUrl = `https://iframe.mediadelivery.net/embed/${BUNNY_LIBRARY_ID}/${guid}?autoplay=true`;
+      setVideoModalInfo({url: embedUrl, type: 'bunny'});
+      return;
+    }
+
+    if (isDirectFile || !isBunnyUrl) {
+      setVideoModalInfo({url: trimmedUrl, type: 'native'});
+      return;
+    }
+
+    setVideoModalInfo({url: trimmedUrl, type: 'native'});
+  };
+
   const renderPostCard = (post: UnifiedPost) => {
     const metric = postMetrics.find(item => item.post.id === post.id);
     if (!metric) {
@@ -1093,7 +1131,8 @@ export default function FeedScreen() {
     const shouldCollapse = postText.length > 180;
     const liked = Boolean(likedByCurrentUser[post.id]);
     const videoPreviewUri = post.videoUrl ? getVideoPreviewImage(post) : null;
-    const isVideoPlaying = Boolean(post.videoUrl) && playingVideoPostId === post.id;
+    const isInlinePlayableVideo = Boolean(post.videoUrl) && post.type === 'drone';
+    const isVideoPlaying = isInlinePlayableVideo && playingVideoPostId === post.id;
 
     const userSpotRating =
       post.type === 'spot'
@@ -1118,48 +1157,73 @@ export default function FeedScreen() {
 
         <View style={styles.mediaFrame}>
           {post.videoUrl ? (
-            <Pressable
-              style={styles.videoPressable}
-              onPress={() =>
-                setPlayingVideoPostId(prev => (prev === post.id ? null : post.id))
-              }>
-              {isVideoPlaying ? (
-                <Video
-                  source={{uri: post.videoUrl}}
-                  style={styles.videoView}
-                  resizeMode="cover"
-                  paused={false}
-                  muted
-                  repeat
-                  controls={false}
-                  onError={playbackError => {
-                    console.warn('[Feed] video playback failed', {
-                      postId: post.id,
-                      error: playbackError,
-                    });
-                    setPlayingVideoPostId(null);
-                  }}
-                />
-              ) : videoPreviewUri ? (
-                <Image source={{uri: videoPreviewUri}} style={styles.imageView} />
-              ) : (
-                <View style={styles.mediaFallback}>
-                  <Icon name="video-off-outline" size={24} color={palette.textMuted} />
-                  <Text style={styles.mediaFallbackText}>{t('feed.video')}</Text>
+            post.type === 'spot' ? (
+              <Pressable
+                style={styles.videoPressable}
+                onPress={() => {
+                  setPlayingVideoPostId(null);
+                  openVideoModal(post.videoUrl!);
+                }}>
+                {videoPreviewUri ? (
+                  <Image source={{uri: videoPreviewUri}} style={styles.imageView} />
+                ) : (
+                  <View style={styles.mediaFallback}>
+                    <Icon name="video-off-outline" size={24} color={palette.textMuted} />
+                    <Text style={styles.mediaFallbackText}>{t('feed.video')}</Text>
+                  </View>
+                )}
+                <View style={styles.videoPill}>
+                  <Icon name="play-circle" size={18} color="#fff" />
+                  <Text style={styles.videoPillText}>{t('feed.video')}</Text>
                 </View>
-              )}
-              <View style={styles.videoPill}>
-                <Icon name="play-circle" size={18} color="#fff" />
-                <Text style={styles.videoPillText}>{t('feed.video')}</Text>
-              </View>
-              <View style={styles.videoTogglePill}>
-                <Icon
-                  name={isVideoPlaying ? 'pause-circle' : 'play-circle'}
-                  size={18}
-                  color="#fff"
-                />
-              </View>
-            </Pressable>
+                <View style={styles.videoTogglePill}>
+                  <Icon name="open-in-new" size={17} color="#fff" />
+                </View>
+              </Pressable>
+            ) : (
+              <Pressable
+                style={styles.videoPressable}
+                onPress={() =>
+                  setPlayingVideoPostId(prev => (prev === post.id ? null : post.id))
+                }>
+                {isVideoPlaying ? (
+                  <Video
+                    source={{uri: post.videoUrl}}
+                    style={styles.videoView}
+                    resizeMode="cover"
+                    paused={false}
+                    muted
+                    repeat
+                    controls={false}
+                    onError={playbackError => {
+                      console.warn('[Feed] video playback failed', {
+                        postId: post.id,
+                        error: playbackError,
+                      });
+                      setPlayingVideoPostId(null);
+                    }}
+                  />
+                ) : videoPreviewUri ? (
+                  <Image source={{uri: videoPreviewUri}} style={styles.imageView} />
+                ) : (
+                  <View style={styles.mediaFallback}>
+                    <Icon name="video-off-outline" size={24} color={palette.textMuted} />
+                    <Text style={styles.mediaFallbackText}>{t('feed.video')}</Text>
+                  </View>
+                )}
+                <View style={styles.videoPill}>
+                  <Icon name="play-circle" size={18} color="#fff" />
+                  <Text style={styles.videoPillText}>{t('feed.video')}</Text>
+                </View>
+                <View style={styles.videoTogglePill}>
+                  <Icon
+                    name={isVideoPlaying ? 'pause-circle' : 'play-circle'}
+                    size={18}
+                    color="#fff"
+                  />
+                </View>
+              </Pressable>
+            )
           ) : post.images.length ? (
             <Image source={{uri: post.images[0]}} style={styles.imageView} />
           ) : (
@@ -1565,6 +1629,52 @@ export default function FeedScreen() {
               }
             />
           </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="slide"
+        transparent={false}
+        visible={Boolean(videoModalInfo)}
+        onRequestClose={() => setVideoModalInfo(null)}>
+        <View style={styles.videoModalContainer}>
+          <TouchableOpacity
+            style={styles.videoModalCloseButton}
+            onPress={() => setVideoModalInfo(null)}>
+            <Icon name="close" size={30} color="#fff" />
+          </TouchableOpacity>
+
+          {videoModalInfo ? (
+            videoModalInfo.type === 'bunny'
+              ? (() => {
+                  const {WebView} = require('react-native-webview');
+                  return (
+                    <WebView
+                      style={styles.videoWebview}
+                      javaScriptEnabled
+                      domStorageEnabled
+                      allowsFullscreenVideo
+                      allowsInlineMediaPlayback
+                      mediaPlaybackRequiresUserAction={false}
+                      originWhitelist={['*']}
+                      source={{uri: videoModalInfo.url}}
+                      thirdPartyCookiesEnabled={false}
+                      javaScriptCanOpenWindowsAutomatically={false}
+                      setSupportMultipleWindows={false}
+                      mixedContentMode="never"
+                    />
+                  );
+                })()
+              : (
+                  <Video
+                    source={{uri: videoModalInfo.url}}
+                    style={styles.videoModalPlayer}
+                    controls
+                    paused={false}
+                    resizeMode="contain"
+                  />
+                )
+          ) : null}
         </View>
       </Modal>
     </View>
@@ -2028,5 +2138,25 @@ const styles = StyleSheet.create({
     borderBottomColor: '#edf2f7',
     paddingVertical: 8,
     gap: 2,
+  },
+  videoModalContainer: {
+    flex: 1,
+    backgroundColor: '#000',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  videoModalCloseButton: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    zIndex: 2,
+  },
+  videoModalPlayer: {
+    width: '100%',
+    height: '100%',
+  },
+  videoWebview: {
+    width: '100%',
+    height: '100%',
   },
 });

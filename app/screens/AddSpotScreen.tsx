@@ -451,11 +451,28 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
               errorStatus === 401 ||
               errorStatus === 403 ||
               errorCode.includes('auth') ||
+              errorCode.includes('unauthorized') ||
+              errorCode.includes('permission-denied') ||
               rawMessage.includes('unauth') ||
-              rawMessage.includes('token');
+              rawMessage.includes('token') ||
+              rawMessage.includes('unauthorized') ||
+              rawMessage.includes('permission');
+            const isNetworkUploadError =
+              errorCode.includes('network') ||
+              errorCode.includes('timeout') ||
+              errorCode.includes('retry') ||
+              errorCode.includes('unavailable') ||
+              rawMessage.includes('network') ||
+              rawMessage.includes('timed out') ||
+              rawMessage.includes('timeout') ||
+              rawMessage.includes('connection');
             Alert.alert(
               t('alerts.error'),
-              isAuthError ? t('alerts.reauthFailedError') : t('alerts.videoUploadError'),
+              isAuthError
+                ? t('alerts.reauthFailedError')
+                : isNetworkUploadError
+                  ? t('alerts.videoUploadError')
+                  : t('alerts.spotSaveError'),
             );
             throw { __bunnyUploadError: true, originalError: error };
           } finally {
