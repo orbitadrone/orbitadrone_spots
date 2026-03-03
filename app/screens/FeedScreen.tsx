@@ -13,6 +13,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  ViewToken,
   View,
 } from 'react-native';
 import MapView, {Marker, PROVIDER_GOOGLE, Region} from 'react-native-maps';
@@ -20,6 +21,7 @@ import Geolocation from '@react-native-community/geolocation';
 import {useFocusEffect, useNavigation, useRoute} from '@react-navigation/native';
 import {BannerAd, BannerAdSize} from 'react-native-google-mobile-ads';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import Video from 'react-native-video';
 import {Rating} from 'react-native-ratings';
 import {useTranslation} from 'react-i18next';
 
@@ -232,6 +234,7 @@ export default function FeedScreen() {
   const [savingCommentByPostId, setSavingCommentByPostId] = useState<Record<string, boolean>>({});
   const [savingRatingBySpotId, setSavingRatingBySpotId] = useState<Record<string, boolean>>({});
   const [savingLikeByPostId, setSavingLikeByPostId] = useState<Record<string, boolean>>({});
+  const [playingVideoPostId, setPlayingVideoPostId] = useState<string | null>(null);
 
   const [expandedTextByPostId, setExpandedTextByPostId] = useState<Record<string, boolean>>({});
   const [visibleRows, setVisibleRows] = useState(12);
@@ -246,6 +249,7 @@ export default function FeedScreen() {
     Record<string, boolean>
   >({});
   const [commentsModalPostId, setCommentsModalPostId] = useState<string | null>(null);
+  const playingVideoPostIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     spotsRef.current = spots;
@@ -258,6 +262,10 @@ export default function FeedScreen() {
   useEffect(() => {
     profilesByUserIdRef.current = profilesByUserId;
   }, [profilesByUserId]);
+
+  useEffect(() => {
+    playingVideoPostIdRef.current = playingVideoPostId;
+  }, [playingVideoPostId]);
 
   const sheetHeight = useRef(new Animated.Value(SHEET_MID_HEIGHT)).current;
   const sheetHeightValueRef = useRef(SHEET_MID_HEIGHT);
@@ -1083,6 +1091,7 @@ export default function FeedScreen() {
     const shouldCollapse = postText.length > 180;
     const liked = Boolean(likedByCurrentUser[post.id]);
     const videoPreviewUri = post.videoUrl ? getVideoPreviewImage(post) : null;
+    const isVideoPlaying = Boolean(post.videoUrl) && playingVideoPostId === post.id;
 
     const userSpotRating =
       post.type === 'spot'
@@ -1107,8 +1116,29 @@ export default function FeedScreen() {
 
         <View style={styles.mediaFrame}>
           {post.videoUrl ? (
-            <>
-              {videoPreviewUri ? (
+            <Pressable
+              style={styles.videoPressable}
+              onPress={() =>
+                setPlayingVideoPostId(prev => (prev === post.id ? null : post.id))
+              }>
+              {isVideoPlaying ? (
+                <Video
+                  source={{uri: post.videoUrl}}
+                  style={styles.videoView}
+                  resizeMode="cover"
+                  paused={false}
+                  muted
+                  repeat
+                  controls={false}
+                  onError={playbackError => {
+                    console.warn('[Feed] video playback failed', {
+                      postId: post.id,
+                      error: playbackError,
+                    });
+                    setPlayingVideoPostId(null);
+                  }}
+                />
+              ) : videoPreviewUri ? (
                 <Image source={{uri: videoPreviewUri}} style={styles.imageView} />
               ) : (
                 <View style={styles.mediaFallback}>
@@ -1120,7 +1150,14 @@ export default function FeedScreen() {
                 <Icon name="play-circle" size={18} color="#fff" />
                 <Text style={styles.videoPillText}>{t('feed.video')}</Text>
               </View>
-            </>
+              <View style={styles.videoTogglePill}>
+                <Icon
+                  name={isVideoPlaying ? 'pause-circle' : 'play-circle'}
+                  size={18}
+                  color="#fff"
+                />
+              </View>
+            </Pressable>
           ) : post.images.length ? (
             <Image source={{uri: post.images[0]}} style={styles.imageView} />
           ) : (
@@ -1302,6 +1339,36 @@ export default function FeedScreen() {
     return renderPostCard(item.post);
   };
 
+  const viewabilityConfigRef = useRef({
+    itemVisiblePercentThreshold: 45,
+  });
+
+  const onViewableItemsChanged = useRef(
+    ({viewableItems}: {viewableItems: Array<ViewToken>}) => {
+      const currentPlayingId = playingVideoPostIdRef.current;
+      if (!currentPlayingId) {
+        return;
+      }
+      const isPlayingPostVisible = viewableItems.some(viewable => {
+        const row = viewable.item as FeedRow | undefined;
+        return row?.kind === 'post' && row.post.id === currentPlayingId;
+      });
+      if (!isPlayingPostVisible) {
+        setPlayingVideoPostId(null);
+      }
+    },
+  ).current;
+
+  useEffect(() => {
+    if (activeLayer !== 'feed' || isPeekMode) {
+      setPlayingVideoPostId(null);
+    }
+  }, [activeLayer, isPeekMode]);
+
+  useEffect(() => {
+    setPlayingVideoPostId(null);
+  }, [feedTab]);
+
   return (
     <View style={styles.container}>
       <View style={StyleSheet.absoluteFill} pointerEvents={activeLayer === 'map' ? 'auto' : 'none'}>
@@ -1419,6 +1486,8 @@ export default function FeedScreen() {
                   item.kind === 'ad' ? item.id : `post-${item.post.id}`
                 }
                 renderItem={renderRow}
+                onViewableItemsChanged={onViewableItemsChanged}
+                viewabilityConfig={viewabilityConfigRef.current}
                 onRefresh={() => refreshContent(true)}
                 refreshing={refreshing}
                 onEndReached={() => {
@@ -1697,6 +1766,9 @@ const styles = StyleSheet.create({
     height: 220,
     backgroundColor: '#e2e8f0',
   },
+  videoPressable: {
+    flex: 1,
+  },
   imageView: {
     width: SCREEN_WIDTH - 24,
     height: 220,
@@ -1716,6 +1788,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
+  },
+  videoTogglePill: {
+    position: 'absolute',
+    right: 10,
+    bottom: 10,
+    borderRadius: 999,
+    backgroundColor: 'rgba(15, 23, 42, 0.74)',
+    paddingVertical: 6,
+    paddingHorizontal: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   videoPillText: {
     color: '#fff',
