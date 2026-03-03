@@ -8,22 +8,25 @@ import CheckBox from '@react-native-community/checkbox';
 import Icon from 'react-native-vector-icons/FontAwesome';
 import { geocode } from '../../src/utils/geocoding';
 import { Video } from 'react-native-compressor';
+import RNFS from 'react-native-fs';
 import { adManager } from '../../src/services/adManager';
 import { useAds } from '../context/AdContext';
 import { useAuthContext } from '../context/AuthContext';
+import CustomButton from '../components/CustomButton';
 
 import { flightStylesOptions } from '../../src/constants/flightStyles';
-import { requestMediaPermission, requestCameraPermission } from '../../src/utils/permissions';
+import { requestCameraPermission } from '../../src/utils/permissions';
 import { validateSpainLocation } from '../../src/utils/geoUtils';
 import { uploadVideoToBunny } from '../../src/services/bunnyStreamService';
+import { palette, radii, shadows } from '../../src/constants/theme';
 
 const VIDEO_LIMITS = {
-  maxDurationSeconds: 60,
-  // ~HD (720p) 1 min ≈ 40–80 MB dependiendo del bitrate.
+  maxDurationSeconds: 180,
+  // ~HD (720p) 1–3 min ≈ 40–200 MB dependiendo del bitrate.
   // Dejamos un margen razonable sin acercarnos al límite de 500 MB del backend.
-  maxSizeMB: 80,
+  maxSizeMB: 200,
   // A partir de aquí intentamos comprimir para aligerar la subida.
-  compressionThresholdMB: 40,
+  compressionThresholdMB: 80,
 } as const;
 
 const BYTES_PER_MB = 1024 * 1024;
@@ -46,6 +49,7 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
   const [spotImage, setSpotImage] = useState<string | null>(spotToEdit?.mainImage || null);
   const [galleryImages, setGalleryImages] = useState<string[]>(spotToEdit?.galleryImages || []);
   const [videoUri, setVideoUri] = useState<string | null>(spotToEdit?.videoUrl || null);
+  const [videoMeta, setVideoMeta] = useState<{ name?: string; type?: string; size?: number } | null>(null);
   const [flightStyles, setFlightStyles] = useState<string[]>(spotToEdit?.flightStyles || []);
   const [tags, setTags] = useState<string[]>(spotToEdit?.tags || []);
   const [tagInput, setTagInput] = useState('');
@@ -56,13 +60,12 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
   const [loading, setLoading] = useState(false);
   const [geocodingLoading, setGeocodingLoading] = useState(false);
   const [compressingVideo, setCompressingVideo] = useState(false);
-  const ensureMediaPermissions = async () => {
-    const mediaGranted = await requestMediaPermission();
+  const ensureCameraPermission = async () => {
     const cameraGranted = await requestCameraPermission();
-    if (!mediaGranted || !cameraGranted) {
+    if (!cameraGranted) {
       Alert.alert(
-        t('alerts.mediaPermissionDeniedTitle'),
-        t('alerts.mediaPermissionDeniedMessage'),
+        t('alerts.cameraPermissionDeniedTitle'),
+        t('alerts.cameraPermissionDeniedMessage'),
       );
       return false;
     }
@@ -70,11 +73,6 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
   };
 
   const pickImagesWithPrompt = async (options: ImageLibraryOptions) => {
-    const canProceed = await ensureMediaPermissions();
-    if (!canProceed) {
-      return null;
-    }
-
     return new Promise<Asset[] | null>((resolve) => {
       let resolved = false;
       const finish = (assets: Asset[] | null) => {
@@ -99,7 +97,12 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
       };
 
       const openLibrary = () => launchImageLibrary(options, handleResponse);
-      const openCamera = () =>
+      const openCamera = async () => {
+        const canUseCamera = await ensureCameraPermission();
+        if (!canUseCamera) {
+          finish(null);
+          return;
+        }
         launchCamera(
           {
             mediaType: options.mediaType ?? 'photo',
@@ -109,6 +112,7 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
           },
           handleResponse,
         );
+      };
 
       Alert.alert(
         t('common.chooseImageSource'),
@@ -212,6 +216,60 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
     return `file:///${input}`;
   };
 
+  const getVideoExtension = (fileName?: string | null, mimeType?: string | null) => {
+    if (fileName) {
+      const match = /\.([a-z0-9]+)$/i.exec(fileName);
+      if (match) {
+        return match[1].toLowerCase();
+      }
+    }
+    if (mimeType) {
+      const normalized = mimeType.toLowerCase();
+      if (normalized === 'video/quicktime') return 'mov';
+      if (normalized === 'video/x-m4v') return 'm4v';
+      if (normalized === 'video/webm') return 'webm';
+      if (normalized === 'video/mp4') return 'mp4';
+      const parts = normalized.split('/');
+      if (parts.length === 2) {
+        return parts[1];
+      }
+    }
+    return 'mp4';
+  };
+
+  const buildCacheVideoPath = (extension: string) =>
+    `${RNFS.CachesDirectoryPath}/orbitadrone_video_${Date.now()}_${Math.floor(
+      Math.random() * 1e6,
+    )}.${extension}`;
+
+  const copyContentUriToCache = async (
+    uri: string,
+    fileName?: string | null,
+    mimeType?: string | null,
+  ) => {
+    try {
+      const extension = getVideoExtension(fileName, mimeType);
+      const destination = buildCacheVideoPath(extension);
+      await RNFS.copyFile(uri, destination);
+      return `file://${destination}`;
+    } catch (error) {
+      console.error('Error copying content URI to cache:', error);
+      return null;
+    }
+  };
+
+  const getFileSize = async (uri: string) => {
+    const path = uri.startsWith('file://') ? uri.replace('file://', '') : uri;
+    try {
+      const stat = await RNFS.stat(path);
+      const size = Number(stat.size);
+      return Number.isFinite(size) ? size : null;
+    } catch (error) {
+      console.warn('Could not stat video file size', error);
+      return null;
+    }
+  };
+
   const normalizeVideoUri = (asset: any) => {
     const { uri, path } = asset;
     if (uri?.startsWith('content://')) {
@@ -230,10 +288,6 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
   };
 
   const handleChooseVideo = async () => {
-    const canProceed = await ensureMediaPermissions();
-    if (!canProceed) {
-      return;
-    }
     const options: ImageLibraryOptions = { mediaType: 'video', includeExtra: true };
     const { maxDurationSeconds, maxSizeMB, compressionThresholdMB } = VIDEO_LIMITS;
 
@@ -243,8 +297,6 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
       }
 
       const videoAsset = response.assets[0];
-      const originalWasContentUri =
-        videoAsset.uri?.startsWith('content://') ?? false;
       const resolvedUri = normalizeVideoUri(videoAsset);
       if (!resolvedUri) {
         Alert.alert(t('alerts.error'), t('alerts.videoCompressErrorMessage'));
@@ -261,53 +313,75 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
         return;
       }
 
-      // Validación de Tamaño
-      if (videoAsset.fileSize && videoAsset.fileSize > maxSizeMB * BYTES_PER_MB) {
-        Alert.alert(t('addSpot.videoTooLargeTitle'), t('addSpot.videoTooLargeMessage', { maxSize: maxSizeMB }));
-        return;
-      }
+      const fallbackName = `${(spotName || 'spot').replace(/\s/g, '_')}_${Date.now()}.mp4`;
+      const baseName = videoAsset.fileName || fallbackName;
+      const baseType = videoAsset.type || 'video/mp4';
 
-      const requiresFileUriConversion = originalWasContentUri; // Android entrega content://; necesitamos file:// para XHR
-      const shouldCompressForSize =
-        videoAsset.fileSize !== undefined &&
-        videoAsset.fileSize > compressionThresholdMB * BYTES_PER_MB;
-      const alwaysCompressLocal = true;
-      const shouldRunCompressor =
-        originalWasContentUri ||
-        shouldCompressForSize ||
-        (alwaysCompressLocal && resolvedUri.startsWith('file://'));
+      setCompressingVideo(true);
+      try {
+        let workingUri = resolvedUri;
+        let workingSize = videoAsset.fileSize;
 
-      if (shouldRunCompressor) {
-        setCompressingVideo(true);
-        try {
-          const compressedUri = await Video.compress(
-            resolvedUri,
-            { compressionMethod: 'auto' },
-            (progress) => {
-              console.log('Compression Progress: ', progress);
-            }
-          );
-          const normalizedCompressedUri =
-            normalizeVideoUri({ uri: compressedUri, path: compressedUri }) ?? compressedUri;
-          console.log('Video compressed to URI:', normalizedCompressedUri);
-          setVideoUri(normalizedCompressedUri);
-        } catch (error) {
-          console.error('Error compressing video:', error);
-          Alert.alert(t('alerts.videoCompressErrorTitle'), t('alerts.videoCompressErrorMessage'));
-          if (originalWasContentUri) {
+        if (workingUri.startsWith('content://')) {
+          const copiedUri = await copyContentUriToCache(workingUri, baseName, baseType);
+          if (!copiedUri) {
+            Alert.alert(t('alerts.error'), t('alerts.videoCompressErrorMessage'));
             setVideoUri(null);
+            setVideoMeta(null);
             return;
           }
-          const fallbackUri =
-            normalizeVideoUri({ uri: resolvedUri, path: resolvedUri }) ?? resolvedUri;
-          setVideoUri(fallbackUri); // Fallback to original video when safe
-        } finally {
-          setCompressingVideo(false);
+          workingUri = copiedUri;
         }
-      } else {
-        const sanitizedUri =
-          normalizeVideoUri({ uri: resolvedUri, path: resolvedUri }) ?? resolvedUri;
-        setVideoUri(sanitizedUri);
+
+        if (!workingSize) {
+          const statSize = await getFileSize(workingUri);
+          if (statSize) {
+            workingSize = statSize;
+          }
+        }
+
+        if (workingSize && workingSize > maxSizeMB * BYTES_PER_MB) {
+          Alert.alert(
+            t('addSpot.videoTooLargeTitle'),
+            t('addSpot.videoTooLargeMessage', { maxSize: maxSizeMB }),
+          );
+          setVideoUri(null);
+          setVideoMeta(null);
+          return;
+        }
+
+        const shouldCompressForSize =
+          workingSize !== undefined &&
+          workingSize > compressionThresholdMB * BYTES_PER_MB;
+
+        if (shouldCompressForSize) {
+          try {
+            const compressedUri = await Video.compress(
+              workingUri,
+              { compressionMethod: 'auto' },
+              (progress) => {
+                console.log('Compression Progress: ', progress);
+              }
+            );
+            const normalizedCompressedUri =
+              normalizeVideoUri({ uri: compressedUri, path: compressedUri }) ?? compressedUri;
+            workingUri = normalizedCompressedUri;
+          } catch (error) {
+            console.error('Error compressing video:', error);
+            Alert.alert(t('alerts.videoCompressErrorTitle'), t('alerts.videoCompressErrorMessage'));
+          }
+        }
+
+        if (workingUri.startsWith('content://')) {
+          const copiedUri = await copyContentUriToCache(workingUri, baseName, baseType);
+          if (copiedUri) {
+            workingUri = copiedUri;
+          }
+        }
+
+        setVideoUri(workingUri);
+        setVideoMeta({ name: baseName, type: baseType, size: workingSize });
+      } finally {
         setCompressingVideo(false);
       }
     });
@@ -352,11 +426,11 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
           setUploadingVideo(true);
           setVideoUploadProgress(0);
           try {
-            const { playbackUrl } = await uploadVideoToBunny({
+          const { playbackUrl } = await uploadVideoToBunny({
               uri,
               title: spotName || 'Orbitadrone Spot',
-              name: `${spotName.replace(/\s/g, '_') || 'spot'}_${Date.now()}.mp4`,
-              contentType: 'video/mp4',
+              name: videoMeta?.name || `${spotName.replace(/\s/g, '_') || 'spot'}_${Date.now()}.mp4`,
+              contentType: videoMeta?.type || 'video/mp4',
               onProgress: ({ loaded, total }) => {
                 if (total && total > 0) {
                   setVideoUploadProgress(Math.min(loaded / total, 1));
@@ -367,14 +441,29 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
             return playbackUrl;
           } catch (error) {
             console.error('Error uploading video to Bunny:', error);
-            Alert.alert(t('alerts.error'), t('alerts.videoUploadError'));
+            const errorCode = String((error as any)?.code ?? '').toLowerCase();
+            const errorStatus = Number((error as any)?.status ?? 0);
+            const rawMessage =
+              error instanceof Error
+                ? error.message.toLowerCase()
+                : String(error ?? '').toLowerCase();
+            const isAuthError =
+              errorStatus === 401 ||
+              errorStatus === 403 ||
+              errorCode.includes('auth') ||
+              rawMessage.includes('unauth') ||
+              rawMessage.includes('token');
+            Alert.alert(
+              t('alerts.error'),
+              isAuthError ? t('alerts.reauthFailedError') : t('alerts.videoUploadError'),
+            );
             throw { __bunnyUploadError: true, originalError: error };
           } finally {
-            setUploadingVideo(false);
-          }
+          setUploadingVideo(false);
         }
-        return uri;
-      };
+      }
+      return uri;
+    };
 
       const finalSpotImageUrl = await uploadImageIfNeeded(spotImage, 'spot_images');
       const finalVideoUrl = await uploadVideoIfNeeded(videoUri);
@@ -502,9 +591,9 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
   }
 
   return (
-    <View style={{ flex: 1 }}>
+    <View style={{ flex: 1, backgroundColor: palette.backgroundLight }}>
       <TouchableOpacity onPress={() => navigation.goBack()} style={styles.closeButton}>
-        <Icon name="close" size={30} color="#000" />
+        <Icon name="close" size={24} color={palette.textPrimary} />
       </TouchableOpacity>
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.container}>
         <Text style={styles.title}>{t(isEditing ? 'addSpot.editTitle' : 'addSpot.title')}</Text>
@@ -621,7 +710,10 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
           {videoUri && !compressingVideo && (
             <TouchableOpacity
               style={styles.removeVideoButton}
-              onPress={() => setVideoUri(null)}
+              onPress={() => {
+                setVideoUri(null);
+                setVideoMeta(null);
+              }}
             >
               <Text style={styles.removeVideoButtonText}>{t('common.remove')}</Text>
             </TouchableOpacity>
@@ -636,7 +728,13 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
         <View style={styles.sectionContainer}>
           <Text style={styles.label}>{t('addSpot.airSafetyLabel')}</Text>
           <Text style={styles.explanationText}>{t('addSpot.enaireExplanation')}</Text>
-          <Button title={t('addSpot.openEnaireButton')} onPress={() => Linking.openURL('https://drones.enaire.es/')} />
+          <CustomButton
+            title={t('addSpot.openEnaireButton')}
+            variant="outline"
+            color={palette.highlight}
+            textColor={palette.highlight}
+            onPress={() => Linking.openURL('https://drones.enaire.es/')}
+          />
         </View>
 
         <View style={styles.sectionContainer}>
@@ -660,10 +758,21 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
           </View>
         </View>
 
-        <Button title={t(isEditing ? 'addSpot.updateButton' : 'addSpot.saveButton')} onPress={handleSaveSpot} />
+        <CustomButton
+          title={t(isEditing ? 'addSpot.updateButton' : 'addSpot.saveButton')}
+          onPress={handleSaveSpot}
+        />
 
         {isEditing && spot && currentUser && spot.createdBy === currentUser.uid && (
-          <View style={styles.deleteButtonContainer}><Button title={t('spotDetail.deleteSpotButton')} onPress={handleDeleteSpot} color="#dc3545" /></View>
+          <View style={styles.deleteButtonContainer}>
+            <CustomButton
+              title={t('spotDetail.deleteSpotButton')}
+              variant="outline"
+              color="#e53935"
+              textColor="#e53935"
+              onPress={handleDeleteSpot}
+            />
+          </View>
         )}
       </ScrollView>
       <Modal
@@ -676,7 +785,10 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
           <View style={styles.tipsModalContent}>
             <Text style={styles.tipsModalTitle}>{t('addSpot.tipsTitle')}</Text>
             <Text style={styles.tipsModalText}>{t('addSpot.tipsBody')}</Text>
-            <Button title={t('common.ok')} onPress={() => setShowTipsModal(false)} />
+            <CustomButton
+              title={t('common.ok')}
+              onPress={() => setShowTipsModal(false)}
+            />
           </View>
         </View>
       </Modal>
@@ -691,14 +803,20 @@ const styles = StyleSheet.create({
   },
   container: {
     padding: 16,
-    paddingTop: 50, // Añadir padding superior para dejar espacio al botón de cerrar
+    paddingTop: 56,
     paddingBottom: 100,
   },
   closeButton: {
     position: 'absolute',
-    top: 15,
-    right: 15,
+    top: 16,
+    right: 16,
     zIndex: 10,
+    backgroundColor: palette.backgroundCard,
+    padding: 8,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: palette.borderLight,
+    ...shadows.subtle,
   },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   loadingText: { marginTop: 12, fontSize: 16, textAlign: 'center' },
@@ -712,19 +830,19 @@ const styles = StyleSheet.create({
   },
   loadingProgressFill: {
     height: '100%',
-    backgroundColor: '#007BFF',
+    backgroundColor: palette.highlight,
   },
-  title: { fontSize: 24, fontWeight: 'bold', textAlign: 'center', marginBottom: 24 },
-  label: { fontSize: 16, fontWeight: 'bold', marginTop: 16, marginBottom: 8 },
-  input: { borderColor: 'gray', borderWidth: 1, borderRadius: 5, marginBottom: 12, paddingHorizontal: 8, color: 'black' },
+  title: { fontSize: 24, fontWeight: 'bold', textAlign: 'center', marginBottom: 24, color: palette.textPrimary },
+  label: { fontSize: 16, fontWeight: 'bold', marginTop: 16, marginBottom: 8, color: palette.textPrimary },
+  input: { borderColor: palette.borderLight, borderWidth: 1, borderRadius: radii.lg, marginBottom: 12, paddingHorizontal: 12, color: palette.textPrimary, backgroundColor: palette.backgroundCard, ...shadows.subtle, height: 44 },
   bioInput: { height: 100, textAlignVertical: 'top' },
-  explanationText: { fontSize: 12, color: 'gray', marginBottom: 12, textAlign: 'center' },
+  explanationText: { fontSize: 12, color: palette.textSecondary, marginBottom: 12, textAlign: 'center' },
   imageHeader: { marginBottom: 24 },
   spotImageContainer: {
     width: '100%',
     height: 220,
-    backgroundColor: '#f0f0f0',
-    borderRadius: 16,
+    backgroundColor: palette.backgroundMuted,
+    borderRadius: radii.lg,
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
@@ -737,7 +855,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   spotImagePlaceholderText: {
-    color: '#666',
+    color: palette.textSecondary,
     fontSize: 16,
     marginTop: 8,
   },
@@ -777,20 +895,22 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     paddingHorizontal: 12,
     paddingVertical: 6,
-    backgroundColor: '#f44336',
-    borderRadius: 16,
+    backgroundColor: palette.backgroundCard,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: '#e53935',
   },
   removeVideoButtonText: {
-    color: '#fff',
+    color: '#e53935',
     fontSize: 12,
     fontWeight: 'bold',
   },
   tipsLinkContainer: { alignSelf: 'stretch', marginBottom: 4 },
   tipsLinkText: { color: '#007BFF', textDecorationLine: 'underline', fontSize: 15, textAlign: 'left', flex: 1 },
   tipsModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: 24 },
-  tipsModalContent: { width: '100%', backgroundColor: '#fff', borderRadius: 12, padding: 20, gap: 16 },
-  tipsModalTitle: { fontSize: 18, fontWeight: '600', textAlign: 'center' },
-  tipsModalText: { fontSize: 15, lineHeight: 22, color: '#333' },
+  tipsModalContent: { width: '100%', backgroundColor: palette.backgroundCard, borderRadius: radii.lg, padding: 20, gap: 16, borderWidth: 1, borderColor: palette.borderLight, ...shadows.subtle },
+  tipsModalTitle: { fontSize: 18, fontWeight: '600', textAlign: 'center', color: palette.textPrimary },
+  tipsModalText: { fontSize: 15, lineHeight: 22, color: palette.textSecondary },
   addButton: {
     width: 100,
     height: 100,
@@ -818,15 +938,18 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   addTagButton: {
-    backgroundColor: '#007BFF',
+    backgroundColor: palette.backgroundCard,
     paddingVertical: 10,
     paddingHorizontal: 12,
-    borderRadius: 6,
+    borderRadius: radii.lg,
     alignSelf: 'stretch',
     justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: palette.borderLight,
+    ...shadows.subtle,
   },
   addTagButtonText: {
-    color: '#fff',
+    color: palette.highlight,
     fontWeight: '600',
   },
   tagsList: {

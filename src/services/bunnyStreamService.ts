@@ -1,12 +1,51 @@
-import { auth } from '../firebaseConfig';
 import { BUNNY_UPLOAD_ENDPOINT as RAW_UPLOAD_ENDPOINT, BUNNY_CDN_HOST as RAW_BUNNY_CDN_HOST } from '@env';
+import { getFreshIdToken } from './authSession';
 
 const BUNNY_UPLOAD_ENDPOINT = RAW_UPLOAD_ENDPOINT?.trim();
+const UPLOAD_TIMEOUT_MS = 10 * 60 * 1000;
+
+type BunnyUploadErrorCode =
+  | 'bunny/auth-required'
+  | 'bunny/auth-rejected'
+  | 'bunny/network'
+  | 'bunny/timeout'
+  | 'bunny/backend';
 
 const getBunnyPlaybackUrl = (guid: string) => {
   // Prefer backend-provided playbackUrl. If absent, derive from env.
   const cdnHost = (RAW_BUNNY_CDN_HOST || '').toString().trim().replace(/\/$/, '');
   return cdnHost ? `${cdnHost}/${guid}/playlist.m3u8` : '';
+};
+
+const buildUploadError = (
+  message: string,
+  code: BunnyUploadErrorCode,
+  status?: number,
+  responseText?: string,
+) => {
+  const error = new Error(message);
+  (error as any).code = code;
+  if (typeof status === 'number') {
+    (error as any).status = status;
+  }
+  if (responseText) {
+    (error as any).responseText = responseText;
+  }
+  return error;
+};
+
+const seemsAuthFailure = (status: number, responseText: string) => {
+  if (status === 401 || status === 403) {
+    return true;
+  }
+  const normalized = responseText.toLowerCase();
+  return (
+    normalized.includes('authorization') ||
+    normalized.includes('token') ||
+    normalized.includes('unauth') ||
+    normalized.includes('decode') ||
+    normalized.includes('auth')
+  );
 };
 
 export const uploadVideoToBunny = async ({
@@ -53,15 +92,26 @@ export const uploadVideoToBunny = async ({
     fd.append('title', title);
   }
 
-  const idToken = await auth?.currentUser?.getIdToken();
-  const headers: Record<string, string> = {};
-  if (idToken) {
-    headers['Authorization'] = `Bearer ${idToken}`;
+  let idToken = '';
+  try {
+    idToken = await getFreshIdToken('bunny_upload', {forceRefresh: true});
+  } catch (tokenError) {
+    console.warn('[Bunny] Missing valid auth token for upload', tokenError);
+    throw buildUploadError(
+      '[Bunny] Missing valid auth token for upload.',
+      'bunny/auth-required',
+      401,
+    );
   }
+
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${idToken}`,
+  };
 
   return new Promise<{ guid: string; playbackUrl: string }>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', BUNNY_UPLOAD_ENDPOINT, true);
+    xhr.timeout = UPLOAD_TIMEOUT_MS;
     Object.entries(headers).forEach(([key, value]) => {
       xhr.setRequestHeader(key, value);
     });
@@ -75,30 +125,79 @@ export const uploadVideoToBunny = async ({
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
         try {
-          const response = JSON.parse(xhr.responseText);
+          const responseText = xhr.responseText;
+          const response = JSON.parse(responseText);
           if (!response.guid) {
-            throw new Error('Invalid response from backend: missing guid.');
+            throw buildUploadError(
+              'Invalid response from backend: missing guid.',
+              'bunny/backend',
+              xhr.status,
+              responseText,
+            );
           }
           resolve({
             guid: response.guid,
             playbackUrl: response.playbackUrl ?? getBunnyPlaybackUrl(response.guid),
           });
         } catch (e) {
-          reject(new Error(`Failed to parse backend response: ${e.message}`));
+          if ((e as any)?.code === 'bunny/backend') {
+            reject(e as Error);
+            return;
+          }
+          const parseError = e instanceof Error ? e.message : String(e);
+          console.warn('[Bunny] Failed to parse backend response', parseError, xhr.responseText);
+          reject(
+            buildUploadError(
+              `Failed to parse backend response: ${parseError}`,
+              'bunny/backend',
+              xhr.status,
+              xhr.responseText,
+            ),
+          );
         }
       } else {
-        const error = new Error(
-          `[Bunny] Backend upload failed (${xhr.status}): ${xhr.responseText}`,
+        const responseText = xhr.responseText || '';
+        const isAuthFailure = seemsAuthFailure(xhr.status, responseText);
+        console.warn('[Bunny] Backend upload failed', {
+          status: xhr.status,
+          response: responseText,
+        });
+        reject(
+          buildUploadError(
+            `[Bunny] Backend upload failed (${xhr.status}): ${responseText}`,
+            isAuthFailure ? 'bunny/auth-rejected' : 'bunny/backend',
+            xhr.status,
+            responseText,
+          ),
         );
-        (error as any).status = xhr.status;
-        reject(error);
       }
     };
 
     xhr.onerror = () => {
-      const error = new Error('[Bunny] Network request failed.');
-      (error as any).status = xhr.status;
-      reject(error);
+      console.warn('[Bunny] Network request failed', {
+        status: xhr.status,
+        response: xhr.responseText,
+      });
+      reject(
+        buildUploadError(
+          '[Bunny] Network request failed.',
+          'bunny/network',
+          xhr.status || 0,
+          xhr.responseText || '',
+        ),
+      );
+    };
+
+    xhr.ontimeout = () => {
+      console.warn('[Bunny] Upload request timed out');
+      reject(
+        buildUploadError(
+          '[Bunny] Upload request timed out.',
+          'bunny/timeout',
+          408,
+          xhr.responseText || '',
+        ),
+      );
     };
 
     xhr.send(fd);

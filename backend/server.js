@@ -13,6 +13,7 @@ const LIB_ID = process.env.BUNNY_LIBRARY_ID;
 const STREAM_KEY = process.env.BUNNY_STREAM_API_KEY;
 const CDN_HOST = (process.env.BUNNY_CDN_HOST || '').replace(/\/$/, '');
 const FIREBASE_AUTH_REQUIRED = String(process.env.FIREBASE_AUTH_REQUIRED || 'true').toLowerCase() !== 'false';
+const UPLOAD_TIMEOUT_MS = Number(process.env.BUNNY_UPLOAD_TIMEOUT_MS || 10 * 60 * 1000);
 
 if (!LIB_ID || !STREAM_KEY || !CDN_HOST) {
   // eslint-disable-next-line no-console
@@ -20,7 +21,12 @@ if (!LIB_ID || !STREAM_KEY || !CDN_HOST) {
 }
 
 // Initialize firebase-admin only when auth is required.
-let verifyIdToken = async () => ({ sub: 'anonymous' });
+let authReady = !FIREBASE_AUTH_REQUIRED;
+let verifyIdToken = async () => {
+  const err = new Error('Auth not initialized');
+  err.status = 503;
+  throw err;
+};
 if (FIREBASE_AUTH_REQUIRED) {
   try {
     if (!admin.apps || admin.apps.length === 0) {
@@ -74,6 +80,7 @@ if (FIREBASE_AUTH_REQUIRED) {
       const token = authHeader.slice(7);
       return await admin.auth().verifyIdToken(token);
     };
+    authReady = true;
     // eslint-disable-next-line no-console
     console.log('[Auth] Firebase Admin initialized.');
   } catch (e) {
@@ -151,9 +158,24 @@ app.post('/bunny/webhook', async (req, res) => {
 });
 
 app.post('/bunny/upload', upload.single('file'), async (req, res) => {
+  const tempPath = req.file?.path;
   try {
     if (FIREBASE_AUTH_REQUIRED) {
-      await verifyIdToken(req.get('authorization'));
+      if (!authReady) {
+        return res.status(503).json({ error: 'Auth not initialized' });
+      }
+      try {
+        await verifyIdToken(req.get('authorization'));
+      } catch (authError) {
+        const authMessage = String(authError || '');
+        const explicitStatus = authError && typeof authError === 'object' && 'status' in authError
+          ? Number(authError.status)
+          : 0;
+        const status = explicitStatus === 401 || explicitStatus === 403 ? explicitStatus : 401;
+        // eslint-disable-next-line no-console
+        console.warn('[Upload] auth failed', { status, authMessage });
+        return res.status(status).json({ error: 'Invalid or expired auth token' });
+      }
     }
 
     if (!req.file) {
@@ -195,8 +217,7 @@ app.post('/bunny/upload', upload.single('file'), async (req, res) => {
       body: stream,
       // Needed for streaming in Node 18 fetch
       duplex: 'half',
-    }, 5 * 60 * 1000); // 5 minutes timeout for large uploads
-    fs.unlink(req.file.path, () => {});
+    }, UPLOAD_TIMEOUT_MS);
 
     if (!uploadResp.ok) {
       const txt = await uploadResp.text().catch(() => '');
@@ -208,10 +229,18 @@ app.post('/bunny/upload', upload.single('file'), async (req, res) => {
       playbackUrl: `${CDN_HOST}/${guid}/playlist.m3u8`,
     });
   } catch (e) {
-    const status = e && typeof e === 'object' && 'status' in e ? e.status : 500;
+    const message = String(e || '');
+    const explicitStatus = e && typeof e === 'object' && 'status' in e ? Number(e.status) : 0;
+    const inferredAuthFailure =
+      /authorization|token|decode|auth|unauth/i.test(message) && explicitStatus !== 408;
+    const status = explicitStatus || (inferredAuthFailure ? 401 : 500);
     // eslint-disable-next-line no-console
     console.error('[Upload] failure', e);
-    return res.status(status || 500).json({ error: String(e) });
+    return res.status(status || 500).json({ error: message });
+  } finally {
+    if (tempPath) {
+      fs.unlink(tempPath, () => {});
+    }
   }
 });
 
