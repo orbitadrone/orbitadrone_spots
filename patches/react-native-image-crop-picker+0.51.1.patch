@@ -1,0 +1,22 @@
+diff --git a/node_modules/react-native-image-crop-picker/android/build.gradle b/node_modules/react-native-image-crop-picker/android/build.gradle
+index 0fe5e81..81636b2 100644
+--- a/node_modules/react-native-image-crop-picker/android/build.gradle
++++ b/node_modules/react-native-image-crop-picker/android/build.gradle
+@@ -66,7 +66,7 @@ android {
+         buildConfigField "boolean", "IS_NEW_ARCHITECTURE_ENABLED", isNewArchitectureEnabled().toString()
+     }
+     lintOptions {
+-        abortOnError false
++        abortOnError = false
+     }
+ 
+     sourceSets.main {
+@@ -86,7 +86,7 @@ android {
+ 
+ repositories {
+     maven {
+-        url "$projectDir/../node_modules/react-native/android"
++        url = "$projectDir/../node_modules/react-native/android"
+     }
+     google()
+     mavenCentral()

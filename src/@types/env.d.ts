@@ -10,6 +10,7 @@ declare module '@env' {
   export const FIREBASE_APP_ID: string | undefined;
   export const FIREBASE_MEASUREMENT_ID: string | undefined;
   export const FIREBASE_DATABASE_URL: string | undefined;
+  export const APP_CHECK_DEBUG_TOKEN: string | undefined;
   export const IOS_ADMOB_APP_ID: string | undefined;
   export const ANDROID_ADMOB_APP_ID: string | undefined;
   export const PURCHASES_API_KEY: string | undefined;

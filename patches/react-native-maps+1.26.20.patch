@@ -1,0 +1,30 @@
+diff --git a/node_modules/react-native-maps/android/build.gradle b/node_modules/react-native-maps/android/build.gradle
+index 0070417..b5c0425 100644
+--- a/node_modules/react-native-maps/android/build.gradle
++++ b/node_modules/react-native-maps/android/build.gradle
+@@ -44,14 +44,14 @@ apply plugin: 'kotlin-android'
+ 
+ android {
+     if (supportsNamespace()) {
+-        namespace "com.rnmaps.maps"
++        namespace = "com.rnmaps.maps"
+     }
+ 
+     if (rootProject.hasProperty("ndkPath")) {
+         ndkPath rootProject.ext.ndkPath
+     }
+     if (rootProject.hasProperty("ndkVersion")) {
+-        ndkVersion rootProject.ext.ndkVersion
++        ndkVersion = rootProject.ext.ndkVersion
+     }
+ 
+     compileSdk safeExtGet('compileSdkVersion', 35)
+@@ -90,7 +90,7 @@ repositories {
+     mavenCentral()
+     maven {
+         // All of React Native (JS, Obj-C sources, Android binaries) is installed from npm
+-        url "$projectDir/../node_modules/react-native/android"
++        url = "$projectDir/../node_modules/react-native/android"
+     }
+     google()
+ }

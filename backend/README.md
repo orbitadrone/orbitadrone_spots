@@ -4,7 +4,7 @@ Minimal Express service that accepts a multipart `file` and optional `title`, cr
 
 ## Setup
 
-- Requirements: Node.js 18+
+- Requirements: Node.js 22 LTS
 - Copy env and install deps:
 
 ```
@@ -29,6 +29,7 @@ docker run --rm -p 3000:3000 --env-file .env orbitadrone-bunny-backend
 - `BUNNY_LIBRARY_ID`
 - `BUNNY_STREAM_API_KEY`
 - `BUNNY_CDN_HOST` (e.g., `https://<library>.b-cdn.net`)
+- `BUNNY_WEBHOOK_TOKEN` (optional but recommended). Shared secret appended to the Bunny webhook URL as `?token=...`.
 - `FIREBASE_AUTH_REQUIRED` (default `true`). If true, clients must send `Authorization: Bearer <Firebase ID token>`.
 - Firebase Admin credentials (pick **one** strategy):
   - `FIREBASE_SERVICE_ACCOUNT` (full JSON of the service account).
@@ -60,7 +61,14 @@ BUNNY_CLIENT_UPLOAD_ENABLED="false"
 
 - Keep Bunny keys only on the server.
 - Require Firebase ID token (recommended). Grant access based on your rules.
-- Add rate limiting, file type checks (`video/*`), and HTTPS in production.
+- Keep `BUNNY_WEBHOOK_TOKEN` enabled in production and configure the Bunny webhook URL like:
+
+```
+https://your-backend.example.com/bunny/webhook?token=YOUR_LONG_RANDOM_SECRET
+```
+
+- Bunny Stream docs do not document a native webhook signature/HMAC flow, so the URL token is the practical shared-secret control here.
+- The backend already applies rate limiting, file type checks (`video/*`), and should always run behind HTTPS in production.
 
 ## Deploy to Cloud Run (optional)
 

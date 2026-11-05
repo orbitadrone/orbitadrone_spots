@@ -1,0 +1,13 @@
+diff --git a/node_modules/react-native-fs/android/build.gradle b/node_modules/react-native-fs/android/build.gradle
+index ddef857..3e15724 100644
+--- a/node_modules/react-native-fs/android/build.gradle
++++ b/node_modules/react-native-fs/android/build.gradle
+@@ -25,7 +25,7 @@ android {
+         versionName "1.0"
+     }
+     lintOptions {
+-        abortOnError false
++        abortOnError = false
+     }
+ }
+ 

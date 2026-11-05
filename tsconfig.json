@@ -1,5 +1,5 @@
 {
-  "extends": "@react-native/typescript-config/tsconfig.json",
+  "extends": "@react-native/typescript-config",
   "compilerOptions": {
     "allowJs": true,
     "noEmit": true,
@@ -13,8 +13,6 @@
     "App.tsx",
     "index.js",
     "app/**/*",
-    "src/**/*",
-    "__tests__/**/*.ts",
-    "__tests__/**/*.tsx"
+    "src/**/*"
   ]
 }

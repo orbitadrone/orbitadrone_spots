@@ -5,7 +5,13 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import CustomButton from './CustomButton';
 import Purchases, { PurchasesOffering } from 'react-native-purchases';
 import Toast from 'react-native-toast-message';
-import { REMOVE_ADS_ENTITLEMENT_ID, REMOVE_ADS_DISPLAY_NAME } from '../../src/constants/purchases';
+import {REMOVE_ADS_DISPLAY_NAME} from '../../src/constants/purchases';
+import { useAds } from '../context/AdContext';
+import logger from '../../src/utils/logger';
+import {
+  getPreferredRemoveAdsPackage,
+  hasRemoveAdsEntitlement,
+} from '../../src/utils/purchases';
 
 interface RemoveAdsModalProps {
   isVisible: boolean;
@@ -21,40 +27,54 @@ const RemoveAdsModal: React.FC<RemoveAdsModalProps> = ({
   const { t } = useTranslation();
   const [offering, setOffering] = useState<PurchasesOffering | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const {
+    refreshCustomerInfo,
+    disableAdsForSession,
+    canRequestAds,
+    isPrivacyOptionsRequired,
+    openPrivacyOptions,
+  } = useAds();
 
   useEffect(() => {
-    if (isVisible) {
-      const fetchOfferings = async () => {
-        setIsLoading(true);
-        try {
-          const offerings = await Purchases.getOfferings();
-          if (offerings.current !== null) {
-            setOffering(offerings.current);
-          }
-        } catch (e) {
-          console.error("Error fetching offerings", e);
-        } finally {
-          setIsLoading(false);
-        }
-      };
-      fetchOfferings();
+    if (!isVisible) {
+      setOffering(null);
+      setIsLoading(false);
+      return;
     }
-  }, [isVisible, t]);
+
+    const fetchOfferings = async () => {
+      setIsLoading(true);
+      try {
+        const offerings = await Purchases.getOfferings();
+        setOffering(offerings.current ?? null);
+      } catch (e) {
+        logger.error('Error fetching offerings', e);
+        setOffering(null);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchOfferings();
+  }, [isVisible]);
+
+  const selectedPackage = getPreferredRemoveAdsPackage(offering);
 
   const handleSubscribe = async () => {
-    if (!offering?.availablePackages[0]) {
+    if (!selectedPackage) {
       return;
     }
     try {
-      const { customerInfo } = await Purchases.purchasePackage(offering.availablePackages[0]);
-      // Aquí puedes verificar si el usuario tiene la suscripción activa
-      if (customerInfo.entitlements.active[REMOVE_ADS_ENTITLEMENT_ID]) {
+      const { customerInfo } = await Purchases.purchasePackage(selectedPackage);
+      if (hasRemoveAdsEntitlement(customerInfo)) {
+        disableAdsForSession();
+        await refreshCustomerInfo();
         Toast.show({ type: 'success', text1: t('iap.purchaseSuccessTitle'), text2: t('iap.purchaseSuccessMessage') });
         onClose();
       }
     } catch (e: any) {
       if (!e.userCancelled) {
-        console.error("Purchase error", e);
+        logger.error('Purchase error', e);
         Toast.show({ type: 'error', text1: t('iap.purchaseError'), text2: e.message });
       }
     }
@@ -63,26 +83,26 @@ const RemoveAdsModal: React.FC<RemoveAdsModalProps> = ({
   const handleRestorePurchases = async () => {
     try {
       const customerInfo = await Purchases.restorePurchases();
-      if (customerInfo.entitlements.active[REMOVE_ADS_ENTITLEMENT_ID]) {
+      if (hasRemoveAdsEntitlement(customerInfo)) {
+        disableAdsForSession();
+        await refreshCustomerInfo();
         Toast.show({ type: 'success', text1: t('iap.restoreSuccessTitle'), text2: t('iap.restoreSuccessMessage') });
         onClose();
       } else {
         Toast.show({ type: 'info', text1: t('iap.restoreEmptyTitle'), text2: t('iap.restoreEmptyMessage') });
       }
     } catch (e) {
-      console.error("Restore error", e);
+      logger.error('Restore error', e);
       Toast.show({ type: 'error', text1: t('iap.restoreError') });
     }
   };
 
-  const monthlyPackage = offering?.availablePackages[0];
-  
   const getSubscribeButtonTitle = () => {
     if (isLoading) {
       return t('common.loading');
     }
-    if (monthlyPackage) {
-      return `${t('removeAds.subscribeButton')} - ${monthlyPackage.product.priceString}`;
+    if (selectedPackage) {
+      return `${t('removeAds.subscribeButton')} - ${selectedPackage.product.priceString}`;
     }
     return t('iap.productNotFound');
   };
@@ -110,14 +130,28 @@ const RemoveAdsModal: React.FC<RemoveAdsModalProps> = ({
               <Text style={styles.optionTitle}>{t('removeAds.rewardOptionTitle')}</Text>
             </View>
             <Text style={styles.optionDescription}>
-              {t('removeAds.rewardOptionDescription')}
+              {canRequestAds
+                ? t('removeAds.rewardOptionDescription')
+                : t('adsPrivacy.rewardBlockedDescription')}
             </Text>
             <CustomButton
               title={t('removeAds.watchAdButton')}
               onPress={onWatchAd}
               style={styles.rewardButton}
               textStyle={styles.rewardButtonText}
+              disabled={!canRequestAds}
             />
+            {!canRequestAds && isPrivacyOptionsRequired ? (
+              <TouchableOpacity
+                style={styles.privacyLinkButton}
+                onPress={() => {
+                  openPrivacyOptions().catch(error => {
+                    logger.warn('[RemoveAdsModal] Failed to open privacy options', error);
+                  });
+                }}>
+                <Text style={styles.privacyLinkText}>{t('adsPrivacy.manageChoicesButton')}</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
 
           <View style={styles.optionContainer}>
@@ -133,7 +167,7 @@ const RemoveAdsModal: React.FC<RemoveAdsModalProps> = ({
             <CustomButton
               title={getSubscribeButtonTitle()}
               onPress={handleSubscribe}
-              disabled={isLoading || !monthlyPackage}
+              disabled={isLoading || !selectedPackage}
             />
           </View>
 
@@ -227,6 +261,16 @@ const styles = StyleSheet.create({
     width: '100%',
     marginTop: 10,
     paddingVertical: 10,
+  },
+  privacyLinkButton: {
+    marginTop: 10,
+    paddingVertical: 8,
+  },
+  privacyLinkText: {
+    color: '#007BFF',
+    fontSize: 14,
+    textDecorationLine: 'underline',
+    textAlign: 'center',
   },
   restoreButtonText: {
     color: '#007BFF',

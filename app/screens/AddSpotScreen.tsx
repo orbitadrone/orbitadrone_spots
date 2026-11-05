@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, StyleSheet, Alert, ActivityIndicator, Image, TouchableOpacity, ScrollView, Linking, Modal } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import { addSpot, updateSpot, Spot, deleteSpot } from '../../src/services/firestoreService';
+import { addSpot, updateSpot, deleteSpot } from '../../src/services/firestoreService';
 import { uploadImage } from '../../src/services/storageService';
 import { launchImageLibrary, launchCamera, ImageLibraryOptions, Asset, ImagePickerResponse } from 'react-native-image-picker';
 import CheckBox from '@react-native-community/checkbox';
@@ -16,9 +16,14 @@ import CustomButton from '../components/CustomButton';
 
 import { flightStylesOptions } from '../../src/constants/flightStyles';
 import { requestCameraPermission } from '../../src/utils/permissions';
-import { validateSpainLocation } from '../../src/utils/geoUtils';
 import { uploadVideoToBunny } from '../../src/services/bunnyStreamService';
 import { palette, radii, shadows } from '../../src/constants/theme';
+import logger from '../../src/utils/logger';
+import type {AppStackScreenProps} from '../../src/navigation/types';
+import {
+  prepareUploadableUri,
+  safeUnlinkManagedMediaUri,
+} from '../features/createDronePost/createDronePostShared';
 
 const VIDEO_LIMITS = {
   maxDurationSeconds: 180,
@@ -32,7 +37,7 @@ const VIDEO_LIMITS = {
 const BYTES_PER_MB = 1024 * 1024;
 const MAX_TAGS = 8;
 
-const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params?: { spot?: Spot, originalSpot?: Spot, coordinate?: { latitude: number, longitude: number } } } }) => {
+const AddSpotScreen = ({navigation, route}: AppStackScreenProps<'AddSpot'>) => {
   const { t } = useTranslation();
   const { spot = null, originalSpot = null, coordinate: initialCoordinate } = route.params || {};
   const { areAdsDisabled } = useAds();
@@ -87,7 +92,7 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
           return;
         }
         if (response.errorCode) {
-          console.log('ImagePicker Error: ', response.errorCode, response.errorMessage);
+          logger.warn('ImagePicker Error', response.errorCode, response.errorMessage);
           Alert.alert(t('alerts.error'), t('alerts.imagePickerError'));
           finish(null);
           return;
@@ -168,7 +173,7 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
             setSpotAddress(result.formatted_address);
           }
         } catch (error) {
-          console.error("Error geocoding: ", error);
+          logger.error('Error geocoding', error);
           Alert.alert(t('alerts.error'), t('alerts.locationError'));
         } finally {
           setGeocodingLoading(false);
@@ -253,7 +258,7 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
       await RNFS.copyFile(uri, destination);
       return `file://${destination}`;
     } catch (error) {
-      console.error('Error copying content URI to cache:', error);
+      logger.error('Error copying content URI to cache', error);
       return null;
     }
   };
@@ -265,7 +270,7 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
       const size = Number(stat.size);
       return Number.isFinite(size) ? size : null;
     } catch (error) {
-      console.warn('Could not stat video file size', error);
+      logger.warn('Could not stat video file size', error);
       return null;
     }
   };
@@ -360,14 +365,14 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
               workingUri,
               { compressionMethod: 'auto' },
               (progress) => {
-                console.log('Compression Progress: ', progress);
+                logger.log('Compression Progress', progress);
               }
             );
             const normalizedCompressedUri =
               normalizeVideoUri({ uri: compressedUri, path: compressedUri }) ?? compressedUri;
             workingUri = normalizedCompressedUri;
           } catch (error) {
-            console.error('Error compressing video:', error);
+            logger.error('Error compressing video', error);
             Alert.alert(t('alerts.videoCompressErrorTitle'), t('alerts.videoCompressErrorMessage'));
           }
         }
@@ -402,23 +407,27 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
     }
     setLoading(true);
     try {
-      if (!isEditing && coordinate) {
-        const { isSpain } = await validateSpainLocation(
-          coordinate.latitude,
-          coordinate.longitude,
-        );
-        if (!isSpain) {
-          Alert.alert(t('alerts.error'), t('alerts.spotOutsideSpain'));
-          return;
-        }
-      }
-
       const uploadImageIfNeeded = async (uri: string | null, pathPrefix: string) => {
-        if (uri && uri.startsWith('file://')) {
-          const path = `${pathPrefix}/${Date.now()}_${spotName.replace(/\s/g, '_')}`;
-          return await uploadImage(uri, path);
+        if (!uri) {
+          return uri;
         }
-        return uri;
+        if (/^https?:\/\//i.test(uri)) {
+          return uri;
+        }
+
+        const prepared = await prepareUploadableUri({
+          uri,
+          fallbackExtension: 'jpg',
+          preferStableCopy: true,
+        });
+        try {
+          const path = `${pathPrefix}/${Date.now()}_${spotName.replace(/\s/g, '_')}`;
+          return await uploadImage(prepared.uploadUri, path);
+        } finally {
+          if (prepared.tempPath) {
+            await safeUnlinkManagedMediaUri(`file://${prepared.tempPath}`);
+          }
+        }
       };
 
       const uploadVideoIfNeeded = async (uri: string | null) => {
@@ -426,37 +435,59 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
           setUploadingVideo(true);
           setVideoUploadProgress(0);
           try {
-          const { playbackUrl } = await uploadVideoToBunny({
+            const preparedVideo = await prepareUploadableUri({
               uri,
-              title: spotName || 'Orbitadrone Spot',
-              name: videoMeta?.name || `${spotName.replace(/\s/g, '_') || 'spot'}_${Date.now()}.mp4`,
-              contentType: videoMeta?.type || 'video/mp4',
-              fallbackStoragePrefix: 'spot_images',
-              onProgress: ({ loaded, total }) => {
-                if (total && total > 0) {
-                  setVideoUploadProgress(Math.min(loaded / total, 1));
-                }
-              },
+              fileName: videoMeta?.name,
+              mimeType: videoMeta?.type,
+              fallbackExtension: 'mp4',
+              preferStableCopy: true,
             });
-            setVideoUploadProgress(1);
-            return playbackUrl;
+            try {
+              const { playbackUrl } = await uploadVideoToBunny({
+                uri: preparedVideo.uploadUri,
+                title: spotName || 'Orbitadrone Spot',
+                name: videoMeta?.name || `${spotName.replace(/\s/g, '_') || 'spot'}_${Date.now()}.mp4`,
+                contentType: videoMeta?.type || 'video/mp4',
+                fallbackStoragePrefix: 'spot_images',
+                allowStorageFallback: false,
+                onProgress: ({ loaded, total }) => {
+                  if (total && total > 0) {
+                    setVideoUploadProgress(Math.min(loaded / total, 1));
+                  }
+                },
+              });
+              setVideoUploadProgress(1);
+              return playbackUrl;
+            } finally {
+              if (preparedVideo.tempPath) {
+                await safeUnlinkManagedMediaUri(`file://${preparedVideo.tempPath}`);
+              }
+            }
           } catch (error) {
-            console.error('Error uploading video to Bunny:', error);
+            logger.error('Error uploading video to Bunny', error);
             const errorCode = String((error as any)?.code ?? '').toLowerCase();
             const errorStatus = Number((error as any)?.status ?? 0);
             const rawMessage =
               error instanceof Error
                 ? error.message.toLowerCase()
                 : String(error ?? '').toLowerCase();
+            const isStoragePermissionError =
+              errorCode === 'storage/unauthorized' ||
+              (errorCode.includes('storage') && errorCode.includes('unauthorized')) ||
+              rawMessage.includes('storage/unauthorized') ||
+              (rawMessage.includes('permission denied') && rawMessage.includes('storage'));
             const isAuthError =
-              errorStatus === 401 ||
-              errorStatus === 403 ||
-              errorCode.includes('auth') ||
-              errorCode.includes('unauthorized') ||
-              rawMessage.includes('unauth') ||
-              rawMessage.includes('token') ||
-              rawMessage.includes('unauthorized') ||
-              rawMessage.includes('auth token');
+              !isStoragePermissionError &&
+              (
+                errorStatus === 401 ||
+                errorStatus === 403 ||
+                errorCode.includes('auth') ||
+                errorCode.includes('unauthorized') ||
+                rawMessage.includes('unauth') ||
+                rawMessage.includes('token') ||
+                rawMessage.includes('unauthorized') ||
+                rawMessage.includes('auth token')
+              );
             const isNetworkUploadError =
               errorCode.includes('network') ||
               errorCode.includes('timeout') ||
@@ -468,7 +499,9 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
               rawMessage.includes('connection');
             Alert.alert(
               t('alerts.error'),
-              isAuthError
+              isStoragePermissionError
+                ? t('alerts.videoUploadError')
+                : isAuthError
                 ? t('alerts.reauthFailedError')
                 : isNetworkUploadError
                   ? t('alerts.videoUploadError')
@@ -476,11 +509,11 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
             );
             throw { __bunnyUploadError: true, originalError: error };
           } finally {
-          setUploadingVideo(false);
+            setUploadingVideo(false);
+          }
         }
-      }
-      return uri;
-    };
+        return uri;
+      };
 
       const finalSpotImageUrl = await uploadImageIfNeeded(spotImage, 'spot_images');
       const finalVideoUrl = await uploadVideoIfNeeded(videoUri);
@@ -546,7 +579,7 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
       if ((error as any)?.__bunnyUploadError) {
         return;
       }
-      console.error("Error saving spot: ", error);
+      logger.error('Error saving spot', error);
       Alert.alert(t('alerts.error'), t('alerts.spotSaveError'));
     } finally {
       setLoading(false);
@@ -572,7 +605,7 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
               Alert.alert(t('alerts.success'), t('alerts.spotDeletedSuccessfully'));
               navigation.goBack();
             } catch (error) {
-              console.error("Error deleting spot: ", error);
+              logger.error('Error deleting spot', error);
               Alert.alert(t('alerts.error'), t('alerts.deleteSpotError'));
             }
           },
@@ -608,7 +641,7 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: palette.backgroundLight }}>
+    <View style={styles.screenContainer}>
       <TouchableOpacity onPress={() => navigation.goBack()} style={styles.closeButton}>
         <Icon name="close" size={24} color={palette.textPrimary} />
       </TouchableOpacity>
@@ -814,6 +847,10 @@ const AddSpotScreen = ({ navigation, route }: { navigation: any, route: { params
 };
 
 const styles = StyleSheet.create({
+  screenContainer: {
+    flex: 1,
+    backgroundColor: palette.backgroundLight,
+  },
   scrollView: {
     flex: 1,
     backgroundColor: '#fff',

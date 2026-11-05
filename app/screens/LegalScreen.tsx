@@ -1,16 +1,9 @@
 import React, { useLayoutEffect } from 'react';
 import { ScrollView, Text, StyleSheet } from 'react-native';
-import { useRoute, useNavigation } from '@react-navigation/native';
+import type {RootStackScreenProps} from '../../src/navigation/types';
 
-type LegalScreenRouteParams = {
-  title: string;
-  content: string;
-};
-
-const LegalScreen = () => {
-  const route = useRoute();
-  const navigation = useNavigation();
-  const { title, content } = route.params as LegalScreenRouteParams;
+const LegalScreen = ({navigation, route}: RootStackScreenProps<'LegalScreen'>) => {
+  const { title, content } = route.params;
 
   // Usar useLayoutEffect para establecer el título de la pantalla
   useLayoutEffect(() => {

@@ -56,19 +56,39 @@ local.properties
 .idea/
 .vscode/
 .firebaserc
-firebase.json
 
 # Signing artifacts
 *.keystore
 *.jks
 android/keystores/
 keystore.properties
+android/keystore.properties
 *.pem
 upload_cert.pem
 android/app/google-services.json
 ios/GoogleService-Info.plist
+backend/.env
+functions/.env
 
 # Build artifacts
 android/build/
 log_crash.txt
 metro.win.cjs
+bunny stream.txt
+
+# Local snapshots, backups and release output are not source code.
+orbitadrone_spots+*/
+orbitadrone_spots_prod_*/
+backups/
+dist/
+outputs/
+*.aab
+*.apk
+*.bundle
+*.zip
+*.tar
+*.tar.gz
+
+# Generated React Native assets are recreated during each Android build.
+android/app/src/main/res/drawable-*/node_modules_*
+android/app/src/main/res/drawable-*/src_assets_*

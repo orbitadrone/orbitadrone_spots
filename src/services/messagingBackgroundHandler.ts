@@ -1,5 +1,8 @@
-import messaging from '@react-native-firebase/messaging';
+import {getMessaging, setBackgroundMessageHandler} from '@react-native-firebase/messaging';
+import logger from '../utils/logger';
 
-messaging().setBackgroundMessageHandler(async remoteMessage => {
-  console.log('[Messaging] Background message received', remoteMessage.messageId);
+const messagingInstance = getMessaging();
+
+setBackgroundMessageHandler(messagingInstance, async remoteMessage => {
+  logger.info('[Messaging] Background message received', remoteMessage.messageId);
 });

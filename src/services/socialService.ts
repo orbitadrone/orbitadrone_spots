@@ -20,9 +20,28 @@ import {
   isRetriableFirestoreError,
   isRetriableNetworkError,
 } from '../utils/retry';
+import {
+  CONTENT_QUERY_CACHE_KEYS,
+  invalidateSocialPostsQueryCache,
+  readCachedContentQuery,
+} from './contentQueryCache';
 import {requireAuthenticatedUser} from './authSession';
+import type {EventPublicJoinMode} from './eventService';
+import logger from '../utils/logger';
 
-export type PostType = 'spot' | 'drone' | 'ad';
+export type PostType = 'spot' | 'drone' | 'event' | 'ad';
+
+export type EventPostMeta = {
+  title: string;
+  startsAtMs: number;
+  locationLabel?: string | null;
+  locationAddress?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  isPublic: boolean;
+  publicJoinMode?: EventPublicJoinMode;
+  coverImageUrl?: string | null;
+};
 
 export interface SocialPost {
   id?: string;
@@ -32,11 +51,13 @@ export interface SocialPost {
   createdAtMs?: number;
   text?: string;
   spotId?: string;
+  eventId?: string;
   media?: {
     images?: string[];
     videoUrl?: string;
     thumbnailUrl?: string;
   };
+  eventMeta?: EventPostMeta;
   isHidden?: boolean;
   hiddenBy?: string | null;
   hiddenAt?: FirebaseFirestoreTypes.Timestamp | null;
@@ -81,6 +102,7 @@ export interface ContentReport {
 }
 
 const db = getFirestore();
+const FIRESTORE_IN_QUERY_LIMIT = 10;
 
 const shouldRetryFirestore = (error: unknown) =>
   isRetriableFirestoreError(error) || isRetriableNetworkError(error);
@@ -93,7 +115,7 @@ const runResilientFirestoreRead = async <T>(
     attempts: 3,
     shouldRetry: shouldRetryFirestore,
     onRetry: ({attempt, delayMs, error}) => {
-      console.warn(
+      logger.warn(
         `[Firestore] ${label} attempt ${attempt} failed. Retrying in ${delayMs}ms`,
         error,
       );
@@ -107,7 +129,7 @@ const wrapFirestoreWrite = async <T>(
   try {
     return await operation();
   } catch (error) {
-    console.error(`[Firestore] ${label} failed`, error);
+    logger.error(`[Firestore] ${label} failed`, error);
     throw error;
   }
 };
@@ -141,8 +163,8 @@ export const createSpotPostForSpot = async ({
   };
 }) => {
   const postRef = doc(db, 'posts', getSpotPostDocId(spotId));
-  return wrapFirestoreWrite('createSpotPostForSpot', () =>
-    setDoc(
+  return wrapFirestoreWrite('createSpotPostForSpot', async () => {
+    await setDoc(
       postRef,
       {
         type: 'spot',
@@ -156,8 +178,9 @@ export const createSpotPostForSpot = async ({
         featured: false,
       },
       {merge: true},
-    ),
-  );
+    );
+    invalidateSocialPostsQueryCache();
+  });
 };
 
 export const createDronePost = async ({
@@ -173,8 +196,8 @@ export const createDronePost = async ({
 }) => {
   const currentUser = await ensureSignedInUserAsync('createDronePost');
   const postsCollectionRef = collection(db, 'posts');
-  return wrapFirestoreWrite('createDronePost', () =>
-    addDoc(postsCollectionRef, {
+  return wrapFirestoreWrite('createDronePost', async () => {
+    const createdPost = await addDoc(postsCollectionRef, {
       type: 'drone',
       createdBy: currentUser.uid,
       text: text ?? '',
@@ -187,27 +210,35 @@ export const createDronePost = async ({
       createdAt: serverTimestamp(),
       isHidden: false,
       featured: false,
-    }),
-  );
+    });
+    invalidateSocialPostsQueryCache();
+    return createdPost;
+  });
 };
 
 const isPostVisible = (post?: Pick<SocialPost, 'isHidden'> | null) =>
   post?.isHidden !== true;
 
 export const getSocialPosts = async (
-  options: {includeHidden?: boolean} = {},
+  options: {includeHidden?: boolean; forceRefresh?: boolean} = {},
 ): Promise<SocialPost[]> => {
-  const {includeHidden = false} = options;
-  const postsCollectionRef = collection(db, 'posts');
-  const postsQuery = query(postsCollectionRef, orderBy('createdAt', 'desc'));
-  const snapshot = await runResilientFirestoreRead('getSocialPosts', () =>
-    getDocs(postsQuery),
-  );
-  const posts = snapshot.docs.map(
-    docSnapshot => ({id: docSnapshot.id, ...docSnapshot.data()} as SocialPost),
-  );
+  const {includeHidden = false, forceRefresh = false} = options;
+  const posts = await readCachedContentQuery({
+    key: CONTENT_QUERY_CACHE_KEYS.socialPosts,
+    forceRefresh,
+    read: async () => {
+      const postsCollectionRef = collection(db, 'posts');
+      const postsQuery = query(postsCollectionRef, orderBy('createdAt', 'desc'));
+      const snapshot = await runResilientFirestoreRead('getSocialPosts', () =>
+        getDocs(postsQuery),
+      );
+      return snapshot.docs.map(
+        docSnapshot => ({id: docSnapshot.id, ...docSnapshot.data()} as SocialPost),
+      );
+    },
+  });
   if (includeHidden) {
-    return posts;
+    return [...posts];
   }
   return posts.filter(isPostVisible);
 };
@@ -233,28 +264,52 @@ export const getSocialPostsByUser = async (
 
 export const setPostHiddenState = async (postId: string, hidden: boolean) => {
   const currentUser = ensureSignedInUser();
-  return wrapFirestoreWrite('setPostHiddenState', () =>
-    updateDoc(doc(db, 'posts', postId), {
+  return wrapFirestoreWrite('setPostHiddenState', async () => {
+    await updateDoc(doc(db, 'posts', postId), {
       isHidden: hidden,
       hiddenBy: hidden ? currentUser.uid : null,
       hiddenAt: hidden ? serverTimestamp() : null,
-    }),
-  );
+    });
+    invalidateSocialPostsQueryCache();
+  });
 };
 
 export const setPostFeaturedState = async (postId: string, featured: boolean) => {
   const currentUser = ensureSignedInUser();
-  return wrapFirestoreWrite('setPostFeaturedState', () =>
-    updateDoc(doc(db, 'posts', postId), {
+  return wrapFirestoreWrite('setPostFeaturedState', async () => {
+    await updateDoc(doc(db, 'posts', postId), {
       featured,
       featuredBy: featured ? currentUser.uid : null,
       featuredAt: featured ? serverTimestamp() : null,
-    }),
-  );
+    });
+    invalidateSocialPostsQueryCache();
+  });
 };
 
 export const deletePostAsAdmin = async (postId: string) =>
-  wrapFirestoreWrite('deletePostAsAdmin', () => deleteDoc(doc(db, 'posts', postId)));
+  wrapFirestoreWrite('deletePostAsAdmin', async () => {
+    await deleteDoc(doc(db, 'posts', postId));
+    invalidateSocialPostsQueryCache();
+  });
+
+export const deletePost = async (postId: string) => {
+  const currentUser = await ensureSignedInUserAsync('deletePost');
+  const postRef = doc(db, 'posts', postId);
+  const postSnapshot = await runResilientFirestoreRead('deletePost.get', () =>
+    getDoc(postRef),
+  );
+  if (!postSnapshot.exists()) {
+    return;
+  }
+  const post = postSnapshot.data() as SocialPost;
+  if (post.createdBy !== currentUser.uid) {
+    throw new Error('No autorizado para eliminar esta publicación.');
+  }
+  return wrapFirestoreWrite('deletePost', async () => {
+    await deleteDoc(postRef);
+    invalidateSocialPostsQueryCache();
+  });
+};
 
 export const addPostComment = async ({
   postId,
@@ -289,27 +344,101 @@ const isPostCommentVisible = (
   comment?.moderationStatus !== 'hidden' &&
   comment?.moderationStatus !== 'rejected';
 
+const getTimestampMillis = (value: unknown) => {
+  if (value && typeof (value as {toMillis?: unknown}).toMillis === 'function') {
+    return (value as {toMillis: () => number}).toMillis();
+  }
+  return 0;
+};
+
+const sortByCreatedAtDesc = <T extends {createdAt?: unknown}>(items: T[]) =>
+  [...items].sort(
+    (a, b) =>
+      getTimestampMillis(b.createdAt) - getTimestampMillis(a.createdAt),
+  );
+
 export const getPostComments = async (
   postId: string,
   options: {includeModerated?: boolean} = {},
 ): Promise<PostComment[]> => {
   const {includeModerated = false} = options;
   const commentsCollectionRef = collection(db, 'postComments');
+  // Avoid requiring a composite index in debug/prod for postId + createdAt.
+  // We sort client-side by createdAt descending after reading.
   const commentsQuery = query(
     commentsCollectionRef,
     where('postId', '==', postId),
-    orderBy('createdAt', 'desc'),
   );
   const snapshot = await runResilientFirestoreRead('getPostComments', () =>
     getDocs(commentsQuery),
   );
   const comments = snapshot.docs.map(
     docSnapshot => ({id: docSnapshot.id, ...docSnapshot.data()} as PostComment),
+  ).sort(
+    (a, b) =>
+      getTimestampMillis(b.createdAt) - getTimestampMillis(a.createdAt),
   );
   if (includeModerated) {
     return comments;
   }
   return comments.filter(isPostCommentVisible);
+};
+
+export const getPostCommentsForPosts = async (
+  postIds: string[],
+  options: {includeModerated?: boolean} = {},
+): Promise<Record<string, PostComment[]>> => {
+  const {includeModerated = false} = options;
+  const normalizedPostIds = Array.from(new Set(postIds.filter(Boolean)));
+  if (!normalizedPostIds.length) {
+    return {};
+  }
+
+  const commentsByPostId: Record<string, PostComment[]> = Object.fromEntries(
+    normalizedPostIds.map(postId => [postId, []]),
+  );
+  const commentsCollectionRef = collection(db, 'postComments');
+  const postIdChunks = chunkArray(normalizedPostIds, FIRESTORE_IN_QUERY_LIMIT);
+
+  const chunkSnapshots = await Promise.allSettled(
+    postIdChunks.map((chunk, chunkIndex) =>
+      runResilientFirestoreRead(`getPostCommentsForPosts.chunk.${chunkIndex}`, () =>
+        getDocs(query(commentsCollectionRef, where('postId', 'in', chunk))),
+      ),
+    ),
+  );
+
+  let failedChunks = 0;
+  chunkSnapshots.forEach(result => {
+    if (result.status !== 'fulfilled') {
+      failedChunks += 1;
+      return;
+    }
+
+    result.value.docs.forEach(docSnapshot => {
+      const comment = {id: docSnapshot.id, ...docSnapshot.data()} as PostComment;
+      if (!comment.postId || !(comment.postId in commentsByPostId)) {
+        return;
+      }
+      commentsByPostId[comment.postId].push(comment);
+    });
+  });
+
+  Object.keys(commentsByPostId).forEach(postId => {
+    const sortedComments = sortByCreatedAtDesc(commentsByPostId[postId]);
+    commentsByPostId[postId] = includeModerated
+      ? sortedComments
+      : sortedComments.filter(isPostCommentVisible);
+  });
+
+  if (failedChunks > 0) {
+    logger.warn('[Firestore] getPostCommentsForPosts partial failure', {
+      failedChunks,
+      requestedPostIds: normalizedPostIds.length,
+    });
+  }
+
+  return commentsByPostId;
 };
 
 export const getAllPostComments = async (
@@ -354,6 +483,17 @@ export const deletePostCommentAsAdmin = async (commentId: string) =>
 const buildLikeDocId = (postType: PostType, postId: string, userId: string) =>
   `${postType}_${postId}_${userId}`;
 
+const chunkArray = <T,>(items: T[], chunkSize: number) => {
+  if (chunkSize <= 0) {
+    return [items];
+  }
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += chunkSize) {
+    chunks.push(items.slice(index, index + chunkSize));
+  }
+  return chunks;
+};
+
 export const togglePostLike = async ({
   postId,
   postType,
@@ -368,7 +508,7 @@ export const togglePostLike = async ({
     getDoc(likeDocRef),
   );
 
-  if (likeDoc.exists) {
+  if (likeDoc.exists()) {
     await wrapFirestoreWrite('togglePostLike.delete', () => deleteDoc(likeDocRef));
     return {liked: false};
   }
@@ -390,29 +530,37 @@ export const getLikesForPosts = async (
   countsByPostId: Record<string, number>;
   likedByCurrentUser: Record<string, boolean>;
 }> => {
-  if (!postIds.length) {
+  const normalizedPostIds = Array.from(new Set(postIds.filter(Boolean)));
+  if (!normalizedPostIds.length) {
     return {countsByPostId: {}, likedByCurrentUser: {}};
   }
-  const postIdSet = new Set(postIds);
+
   const likesCollectionRef = collection(db, 'likes');
-  const snapshot = await runResilientFirestoreRead('getLikesForPosts', () =>
-    getDocs(likesCollectionRef),
-  );
 
   const countsByPostId: Record<string, number> = {};
   const likedByCurrentUser: Record<string, boolean> = {};
   const currentUserId = auth.currentUser?.uid;
 
-  snapshot.docs.forEach(docSnapshot => {
-    const data = docSnapshot.data() as PostLike;
-    if (!data.postId || !postIdSet.has(data.postId)) {
-      return;
-    }
+  const postIdChunks = chunkArray(normalizedPostIds, FIRESTORE_IN_QUERY_LIMIT);
+  const chunkSnapshots = await Promise.all(
+    postIdChunks.map((chunk, chunkIndex) =>
+      runResilientFirestoreRead(`getLikesForPosts.chunk.${chunkIndex}`, () =>
+        getDocs(query(likesCollectionRef, where('postId', 'in', chunk))),
+      ),
+    ),
+  );
 
-    countsByPostId[data.postId] = (countsByPostId[data.postId] ?? 0) + 1;
-    if (currentUserId && data.userId === currentUserId) {
-      likedByCurrentUser[data.postId] = true;
-    }
+  chunkSnapshots.forEach(snapshot => {
+    snapshot.docs.forEach(docSnapshot => {
+      const data = docSnapshot.data() as PostLike;
+      if (!data.postId) {
+        return;
+      }
+      countsByPostId[data.postId] = (countsByPostId[data.postId] ?? 0) + 1;
+      if (currentUserId && data.userId === currentUserId) {
+        likedByCurrentUser[data.postId] = true;
+      }
+    });
   });
 
   return {countsByPostId, likedByCurrentUser};
@@ -421,25 +569,8 @@ export const getLikesForPosts = async (
 export const getLikesReceivedSummaryForPostIds = async (
   postIds: string[],
 ): Promise<Record<string, number>> => {
-  if (!postIds.length) {
-    return {};
-  }
-  const postIdSet = new Set(postIds);
-  const likesCollectionRef = collection(db, 'likes');
-  const snapshot = await runResilientFirestoreRead(
-    'getLikesReceivedSummaryForPostIds',
-    () => getDocs(likesCollectionRef),
-  );
-
-  const counts: Record<string, number> = {};
-  snapshot.docs.forEach(docSnapshot => {
-    const data = docSnapshot.data() as PostLike;
-    if (!data.postId || !postIdSet.has(data.postId)) {
-      return;
-    }
-    counts[data.postId] = (counts[data.postId] ?? 0) + 1;
-  });
-  return counts;
+  const {countsByPostId} = await getLikesForPosts(postIds);
+  return countsByPostId;
 };
 
 export const submitContentReport = async ({

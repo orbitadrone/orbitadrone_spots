@@ -1,0 +1,718 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/adminUsers/$(request.auth.uid));
+    }
+
+    function isSpotOwner() {
+      return isSignedIn() && request.auth.uid == resource.data.createdBy;
+    }
+
+    function createdByUnchanged() {
+      return !(resource.data.createdBy is string) ||
+        request.resource.data.createdBy == resource.data.createdBy;
+    }
+
+    function validRatings() {
+      return (!('averageRating' in request.resource.data) ||
+          (request.resource.data.averageRating is number &&
+            request.resource.data.averageRating >= 0 &&
+            request.resource.data.averageRating <= 5)) &&
+        (!('reviewCount' in request.resource.data) ||
+          (request.resource.data.reviewCount is number &&
+            request.resource.data.reviewCount >= 0)) &&
+        (!('ratingCount' in request.resource.data) ||
+          (request.resource.data.ratingCount is number &&
+            request.resource.data.ratingCount >= 0));
+    }
+
+    function spotAggregatesZeroOnCreate() {
+      return (!('averageRating' in request.resource.data) ||
+          request.resource.data.averageRating == 0) &&
+        (!('reviewCount' in request.resource.data) ||
+          request.resource.data.reviewCount == 0) &&
+        (!('ratingCount' in request.resource.data) ||
+          request.resource.data.ratingCount == 0);
+    }
+
+    function spotAggregatesUnchanged() {
+      return (
+        (('averageRating' in resource.data)
+          ? request.resource.data.averageRating == resource.data.averageRating
+          : !('averageRating' in request.resource.data)) &&
+        (('reviewCount' in resource.data)
+          ? request.resource.data.reviewCount == resource.data.reviewCount
+          : !('reviewCount' in request.resource.data)) &&
+        (('ratingCount' in resource.data)
+          ? request.resource.data.ratingCount == resource.data.ratingCount
+          : !('ratingCount' in request.resource.data))
+      );
+    }
+
+    function validSpotModerationFields() {
+      return (!('isHidden' in request.resource.data) ||
+          request.resource.data.isHidden is bool) &&
+        (!('hiddenBy' in request.resource.data) ||
+          request.resource.data.hiddenBy is string ||
+          request.resource.data.hiddenBy == null) &&
+        (!('hiddenAt' in request.resource.data) ||
+          request.resource.data.hiddenAt is timestamp ||
+          request.resource.data.hiddenAt == null) &&
+        (!('featured' in request.resource.data) ||
+          request.resource.data.featured is bool) &&
+        (!('featuredBy' in request.resource.data) ||
+          request.resource.data.featuredBy is string ||
+          request.resource.data.featuredBy == null) &&
+        (!('featuredAt' in request.resource.data) ||
+          request.resource.data.featuredAt is timestamp ||
+          request.resource.data.featuredAt == null);
+    }
+
+    function spotModerationDefaultsOnCreate() {
+      return (!('isHidden' in request.resource.data) ||
+          request.resource.data.isHidden == false) &&
+        (!('hiddenBy' in request.resource.data) ||
+          request.resource.data.hiddenBy == null) &&
+        (!('hiddenAt' in request.resource.data) ||
+          request.resource.data.hiddenAt == null) &&
+        (!('featured' in request.resource.data) ||
+          request.resource.data.featured == false) &&
+        (!('featuredBy' in request.resource.data) ||
+          request.resource.data.featuredBy == null) &&
+        (!('featuredAt' in request.resource.data) ||
+          request.resource.data.featuredAt == null);
+    }
+
+    function spotModerationUnchanged() {
+      return (
+        (('isHidden' in resource.data)
+          ? request.resource.data.isHidden == resource.data.isHidden
+          : !('isHidden' in request.resource.data)) &&
+        (('hiddenBy' in resource.data)
+          ? request.resource.data.hiddenBy == resource.data.hiddenBy
+          : !('hiddenBy' in request.resource.data)) &&
+        (('hiddenAt' in resource.data)
+          ? request.resource.data.hiddenAt == resource.data.hiddenAt
+          : !('hiddenAt' in request.resource.data)) &&
+        (('featured' in resource.data)
+          ? request.resource.data.featured == resource.data.featured
+          : !('featured' in request.resource.data)) &&
+        (('featuredBy' in resource.data)
+          ? request.resource.data.featuredBy == resource.data.featuredBy
+          : !('featuredBy' in request.resource.data)) &&
+        (('featuredAt' in resource.data)
+          ? request.resource.data.featuredAt == resource.data.featuredAt
+          : !('featuredAt' in request.resource.data))
+      );
+    }
+
+    function userModerationDefaults() {
+      return (!('moderationStatus' in request.resource.data) ||
+          request.resource.data.moderationStatus == 'active') &&
+        (!('moderationNotes' in request.resource.data) ||
+          request.resource.data.moderationNotes == null) &&
+        (!('moderatedBy' in request.resource.data) ||
+          request.resource.data.moderatedBy == null) &&
+        (!('moderatedAt' in request.resource.data) ||
+          request.resource.data.moderatedAt == null);
+    }
+
+    function userModerationUnchanged() {
+      return (
+        (('moderationStatus' in resource.data)
+          ? request.resource.data.moderationStatus == resource.data.moderationStatus
+          : !('moderationStatus' in request.resource.data)) &&
+        (('moderationNotes' in resource.data)
+          ? request.resource.data.moderationNotes == resource.data.moderationNotes
+          : !('moderationNotes' in request.resource.data)) &&
+        (('moderatedBy' in resource.data)
+          ? request.resource.data.moderatedBy == resource.data.moderatedBy
+          : !('moderatedBy' in request.resource.data)) &&
+        (('moderatedAt' in resource.data)
+          ? request.resource.data.moderatedAt == resource.data.moderatedAt
+          : !('moderatedAt' in request.resource.data))
+      );
+    }
+
+    function isRatingReview() {
+      return request.resource.data.type == 'rating';
+    }
+
+    function isCommentReview() {
+      return request.resource.data.type == 'comment';
+    }
+
+    function reviewSpotValid() {
+      return request.resource.data.spotId is string &&
+        request.resource.data.spotId.size() > 0;
+    }
+
+    function reviewUserValid() {
+      return request.resource.data.userId == request.auth.uid;
+    }
+
+    function reviewImmutableFieldsUnchanged() {
+      return request.resource.data.userId == resource.data.userId &&
+        request.resource.data.spotId == resource.data.spotId &&
+        request.resource.data.type == resource.data.type;
+    }
+
+    function ratingIdMatches(reviewId) {
+      return reviewId == ('rating_' + request.resource.data.spotId + '_' + request.auth.uid);
+    }
+
+    function validRatingValue() {
+      return request.resource.data.rating is number &&
+        request.resource.data.rating >= 1 &&
+        request.resource.data.rating <= 5;
+    }
+
+    function ratingHasNoText() {
+      return !('text' in request.resource.data);
+    }
+
+    function commentHasNoRating() {
+      return !('rating' in request.resource.data);
+    }
+
+    function hasCommentText() {
+      return request.resource.data.text is string &&
+        request.resource.data.text.size() > 0;
+    }
+
+    function reviewModerationDefaults() {
+      return (!('moderationStatus' in request.resource.data) ||
+          request.resource.data.moderationStatus == 'approved') &&
+        (!('moderationNotes' in request.resource.data) ||
+          request.resource.data.moderationNotes == null) &&
+        (!('moderatedBy' in request.resource.data) ||
+          request.resource.data.moderatedBy == null) &&
+        (!('moderatedAt' in request.resource.data) ||
+          request.resource.data.moderatedAt == null) &&
+        (!('reportCount' in request.resource.data) ||
+          request.resource.data.reportCount == 0);
+    }
+
+    function reviewModerationUnchanged() {
+      return (
+        (('moderationStatus' in resource.data)
+          ? request.resource.data.moderationStatus == resource.data.moderationStatus
+          : !('moderationStatus' in request.resource.data)) &&
+        (('moderationNotes' in resource.data)
+          ? request.resource.data.moderationNotes == resource.data.moderationNotes
+          : !('moderationNotes' in request.resource.data)) &&
+        (('moderatedBy' in resource.data)
+          ? request.resource.data.moderatedBy == resource.data.moderatedBy
+          : !('moderatedBy' in request.resource.data)) &&
+        (('moderatedAt' in resource.data)
+          ? request.resource.data.moderatedAt == resource.data.moderatedAt
+          : !('moderatedAt' in request.resource.data)) &&
+        (('reportCount' in resource.data)
+          ? request.resource.data.reportCount == resource.data.reportCount
+          : !('reportCount' in request.resource.data))
+      );
+    }
+
+    function validPostType() {
+      return request.resource.data.type in ['spot', 'drone', 'event', 'ad'];
+    }
+
+    function validPostModerationFields() {
+      return (!('isHidden' in request.resource.data) ||
+          request.resource.data.isHidden is bool) &&
+        (!('hiddenBy' in request.resource.data) ||
+          request.resource.data.hiddenBy is string ||
+          request.resource.data.hiddenBy == null) &&
+        (!('hiddenAt' in request.resource.data) ||
+          request.resource.data.hiddenAt is timestamp ||
+          request.resource.data.hiddenAt == null) &&
+        (!('featured' in request.resource.data) ||
+          request.resource.data.featured is bool) &&
+        (!('featuredBy' in request.resource.data) ||
+          request.resource.data.featuredBy is string ||
+          request.resource.data.featuredBy == null) &&
+        (!('featuredAt' in request.resource.data) ||
+          request.resource.data.featuredAt is timestamp ||
+          request.resource.data.featuredAt == null);
+    }
+
+    function postModerationDefaults() {
+      return (!('isHidden' in request.resource.data) ||
+          request.resource.data.isHidden == false) &&
+        (!('hiddenBy' in request.resource.data) ||
+          request.resource.data.hiddenBy == null) &&
+        (!('hiddenAt' in request.resource.data) ||
+          request.resource.data.hiddenAt == null) &&
+        (!('featured' in request.resource.data) ||
+          request.resource.data.featured == false) &&
+        (!('featuredBy' in request.resource.data) ||
+          request.resource.data.featuredBy == null) &&
+        (!('featuredAt' in request.resource.data) ||
+          request.resource.data.featuredAt == null);
+    }
+
+    function postModerationUnchanged() {
+      return (
+        (('isHidden' in resource.data)
+          ? request.resource.data.isHidden == resource.data.isHidden
+          : !('isHidden' in request.resource.data)) &&
+        (('hiddenBy' in resource.data)
+          ? request.resource.data.hiddenBy == resource.data.hiddenBy
+          : !('hiddenBy' in request.resource.data)) &&
+        (('hiddenAt' in resource.data)
+          ? request.resource.data.hiddenAt == resource.data.hiddenAt
+          : !('hiddenAt' in request.resource.data)) &&
+        (('featured' in resource.data)
+          ? request.resource.data.featured == resource.data.featured
+          : !('featured' in request.resource.data)) &&
+        (('featuredBy' in resource.data)
+          ? request.resource.data.featuredBy == resource.data.featuredBy
+          : !('featuredBy' in request.resource.data)) &&
+        (('featuredAt' in resource.data)
+          ? request.resource.data.featuredAt == resource.data.featuredAt
+          : !('featuredAt' in request.resource.data))
+      );
+    }
+
+    function postImmutableUnchanged() {
+      return request.resource.data.createdBy == resource.data.createdBy &&
+        request.resource.data.type == resource.data.type &&
+        (
+          (('spotId' in resource.data)
+            ? request.resource.data.spotId == resource.data.spotId
+            : !('spotId' in request.resource.data))
+        ) &&
+        (
+          (('eventId' in resource.data)
+            ? request.resource.data.eventId == resource.data.eventId
+            : !('eventId' in request.resource.data))
+        );
+    }
+
+    function validPostCommentModerationDefaults() {
+      return (!('moderationStatus' in request.resource.data) ||
+          request.resource.data.moderationStatus == 'approved') &&
+        (!('moderationNotes' in request.resource.data) ||
+          request.resource.data.moderationNotes == null) &&
+        (!('moderatedBy' in request.resource.data) ||
+          request.resource.data.moderatedBy == null) &&
+        (!('moderatedAt' in request.resource.data) ||
+          request.resource.data.moderatedAt == null);
+    }
+
+    function postCommentModerationUnchanged() {
+      return (
+        (('moderationStatus' in resource.data)
+          ? request.resource.data.moderationStatus == resource.data.moderationStatus
+          : !('moderationStatus' in request.resource.data)) &&
+        (('moderationNotes' in resource.data)
+          ? request.resource.data.moderationNotes == resource.data.moderationNotes
+          : !('moderationNotes' in request.resource.data)) &&
+        (('moderatedBy' in resource.data)
+          ? request.resource.data.moderatedBy == resource.data.moderatedBy
+          : !('moderatedBy' in request.resource.data)) &&
+        (('moderatedAt' in resource.data)
+          ? request.resource.data.moderatedAt == resource.data.moderatedAt
+          : !('moderatedAt' in request.resource.data))
+      );
+    }
+
+    function validPostCommentPayload() {
+      return request.resource.data.postId is string &&
+        request.resource.data.postId.size() > 0 &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.text is string &&
+        request.resource.data.text.size() > 0;
+    }
+
+    function validLikeDocId(likeId) {
+      return likeId == (
+        request.resource.data.postType + '_' +
+        request.resource.data.postId + '_' +
+        request.auth.uid
+      );
+    }
+
+    function eventDoc(eventId) {
+      return get(/databases/$(database)/documents/events/$(eventId));
+    }
+
+    function eventExists(eventId) {
+      return exists(/databases/$(database)/documents/events/$(eventId));
+    }
+
+    function isEventOwnerFromData(eventData) {
+      return isSignedIn() &&
+        eventData.createdBy is string &&
+        request.auth.uid == eventData.createdBy;
+    }
+
+    function isEventOwnerById(eventId) {
+      return eventExists(eventId) &&
+        isEventOwnerFromData(eventDoc(eventId).data);
+    }
+
+    function eventParticipantDoc(eventId, participantId) {
+      return get(
+        /databases/$(database)/documents/events/$(eventId)/participants/$(participantId)
+      );
+    }
+
+    function eventParticipantExists(eventId, participantId) {
+      return exists(
+        /databases/$(database)/documents/events/$(eventId)/participants/$(participantId)
+      );
+    }
+
+    function canReadEventAsParticipant(eventId) {
+      return isSignedIn() &&
+        eventParticipantExists(eventId, request.auth.uid) &&
+        eventParticipantDoc(eventId, request.auth.uid).data.status != 'declined';
+    }
+
+    function eventUsesOpenJoinMode(eventId) {
+      return eventExists(eventId) &&
+        eventDoc(eventId).data.isPublic == true &&
+        ('publicJoinMode' in eventDoc(eventId).data) &&
+        eventDoc(eventId).data.publicJoinMode == 'open';
+    }
+
+    function canReadEventFromData(eventData, eventId) {
+      return isSignedIn() &&
+        (
+          isAdmin() ||
+          eventData.isPublic == true ||
+          isEventOwnerFromData(eventData) ||
+          canReadEventAsParticipant(eventId)
+        );
+    }
+
+    function canReadEventById(eventId) {
+      return eventExists(eventId) &&
+        canReadEventFromData(eventDoc(eventId).data, eventId);
+    }
+
+    function validEventCoreFields() {
+      return request.resource.data.title is string &&
+        request.resource.data.title.size() > 0 &&
+        request.resource.data.description is string &&
+        request.resource.data.createdBy is string &&
+        request.resource.data.createdBy.size() > 0 &&
+        request.resource.data.startsAt is timestamp &&
+        request.resource.data.startsAtMs is number &&
+        request.resource.data.cleanupAfterMs is number &&
+        request.resource.data.isPublic is bool &&
+        (!('publicJoinMode' in request.resource.data) ||
+          request.resource.data.publicJoinMode in ['approval_required', 'open']) &&
+        (!('coordinates' in request.resource.data) ||
+          request.resource.data.coordinates == null ||
+          request.resource.data.coordinates is latlng) &&
+        (!('locationLabel' in request.resource.data) ||
+          request.resource.data.locationLabel is string ||
+          request.resource.data.locationLabel == null) &&
+        (!('locationAddress' in request.resource.data) ||
+          request.resource.data.locationAddress is string ||
+          request.resource.data.locationAddress == null) &&
+        (!('mirrorPostId' in request.resource.data) ||
+          request.resource.data.mirrorPostId is string);
+    }
+
+    function eventImmutableFieldsUnchanged() {
+      return request.resource.data.createdBy == resource.data.createdBy &&
+        request.resource.data.startsAt == resource.data.startsAt &&
+        request.resource.data.startsAtMs == resource.data.startsAtMs &&
+        request.resource.data.cleanupAfterMs == resource.data.cleanupAfterMs &&
+        (
+          (('mirrorPostId' in resource.data)
+            ? request.resource.data.mirrorPostId == resource.data.mirrorPostId
+            : !('mirrorPostId' in request.resource.data))
+        );
+    }
+
+    match /adminUsers/{adminId} {
+      allow read: if isSignedIn() && request.auth.uid == adminId;
+      allow write: if false;
+    }
+
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isOwner(userId) && userModerationDefaults();
+      allow update: if (isOwner(userId) && userModerationUnchanged()) || isAdmin();
+      allow delete: if isOwner(userId) || isAdmin();
+
+      match /notificationTokens/{token} {
+        allow read, write: if isOwner(userId);
+      }
+
+      match /activity/{activityId} {
+        allow read: if isOwner(userId);
+        allow create: if false;
+        allow update: if isOwner(userId) &&
+          request.resource.data.userId == resource.data.userId &&
+          request.resource.data.diff(resource.data).changedKeys().hasOnly(['isRead', 'readAt']) &&
+          request.resource.data.isRead is bool &&
+          request.resource.data.isRead == true &&
+          (
+            !('readAt' in request.resource.data) ||
+            request.resource.data.readAt is timestamp ||
+            request.resource.data.readAt == null
+          );
+        allow delete: if isOwner(userId);
+      }
+    }
+
+    match /spots/{spotId} {
+      allow read: if isAdmin() ||
+        !('isHidden' in resource.data) ||
+        resource.data.isHidden != true;
+
+      allow create: if isSignedIn() &&
+        request.auth.uid == request.resource.data.createdBy &&
+        request.resource.data.coordinates is latlng &&
+        validRatings() &&
+        spotAggregatesZeroOnCreate() &&
+        validSpotModerationFields() &&
+        spotModerationDefaultsOnCreate();
+
+      allow update: if createdByUnchanged() &&
+        validRatings() &&
+        validSpotModerationFields() &&
+        spotAggregatesUnchanged() &&
+        (
+          (isSpotOwner() && spotModerationUnchanged()) ||
+          isAdmin()
+        );
+
+      allow delete: if isSpotOwner() || isAdmin();
+    }
+
+    match /reviews/{reviewId} {
+      allow read: if isSignedIn();
+
+      allow create: if isSignedIn() &&
+        reviewUserValid() &&
+        reviewSpotValid() &&
+        reviewModerationDefaults() &&
+        (
+          (isRatingReview() && ratingIdMatches(reviewId) && validRatingValue() && ratingHasNoText()) ||
+          (isCommentReview() && hasCommentText() && commentHasNoRating())
+        );
+
+      allow update: if isSignedIn() && reviewImmutableFieldsUnchanged() &&
+        (
+          (
+            request.auth.uid == resource.data.userId &&
+            reviewModerationUnchanged() &&
+            (
+              (resource.data.type == 'rating' && ratingIdMatches(reviewId) && validRatingValue() && ratingHasNoText()) ||
+              (resource.data.type == 'comment' && hasCommentText() && commentHasNoRating())
+            )
+          ) ||
+          isAdmin()
+        );
+
+      allow delete: if isSignedIn() &&
+        (request.auth.uid == resource.data.userId || isAdmin());
+    }
+
+    match /posts/{postId} {
+      allow read: if isSignedIn() &&
+        (isAdmin() ||
+          !('isHidden' in resource.data) ||
+          resource.data.isHidden != true);
+
+      allow create: if isSignedIn() &&
+        request.resource.data.createdBy == request.auth.uid &&
+        validPostType() &&
+        validPostModerationFields() &&
+        postModerationDefaults();
+
+      allow update: if isSignedIn() &&
+        postImmutableUnchanged() &&
+        validPostModerationFields() &&
+        (
+          (request.auth.uid == resource.data.createdBy && postModerationUnchanged()) ||
+          isAdmin()
+        );
+
+      allow delete: if isSignedIn() &&
+        (request.auth.uid == resource.data.createdBy || isAdmin());
+    }
+
+    match /events/{eventId} {
+      allow read: if canReadEventFromData(resource.data, eventId);
+
+      allow create: if isSignedIn() &&
+        request.resource.data.createdBy == request.auth.uid &&
+        validEventCoreFields();
+
+      allow update: if validEventCoreFields() &&
+        eventImmutableFieldsUnchanged() &&
+        (
+          isEventOwnerById(eventId) ||
+          isAdmin()
+        );
+
+      allow delete: if isEventOwnerById(eventId) || isAdmin();
+
+      match /participants/{participantId} {
+        allow read: if canReadEventById(eventId);
+
+        allow create: if isSignedIn() &&
+          request.resource.data.userId == participantId &&
+          (
+            (
+              isEventOwnerById(eventId) &&
+              request.resource.data.status in ['host', 'invited']
+            ) ||
+            (
+              request.auth.uid == participantId &&
+              eventDoc(eventId).data.isPublic == true &&
+              (
+                (
+                  !eventUsesOpenJoinMode(eventId) &&
+                  request.resource.data.status == 'requested' &&
+                  request.resource.data.invitedBy == null
+                ) ||
+                (
+                  eventUsesOpenJoinMode(eventId) &&
+                  request.resource.data.status == 'going' &&
+                  request.resource.data.invitedBy == eventDoc(eventId).data.createdBy &&
+                  request.resource.data.respondedAt is timestamp
+                )
+              )
+            )
+          );
+
+        allow update: if isSignedIn() &&
+          request.resource.data.userId == resource.data.userId &&
+          request.resource.data.createdAt == resource.data.createdAt &&
+          (
+            (
+              isEventOwnerById(eventId) &&
+              participantId != eventDoc(eventId).data.createdBy &&
+              request.resource.data.status in ['invited', 'declined'] &&
+              (
+                (
+                  request.resource.data.status == 'invited' &&
+                  request.resource.data.invitedBy == request.auth.uid
+                ) ||
+                (
+                  request.resource.data.status == 'declined' &&
+                  request.resource.data.invitedBy == resource.data.invitedBy
+                )
+              )
+            ) ||
+            (
+              request.auth.uid == participantId &&
+              request.resource.data.userId == request.auth.uid &&
+              (
+                (
+                  eventUsesOpenJoinMode(eventId) &&
+                  resource.data.status == 'requested' &&
+                  request.resource.data.status == 'going' &&
+                  request.resource.data.invitedBy == eventDoc(eventId).data.createdBy
+                ) ||
+                (
+                  resource.data.invitedBy is string &&
+                  resource.data.status in ['invited', 'going'] &&
+                  request.resource.data.status in ['going', 'declined'] &&
+                  request.resource.data.invitedBy == resource.data.invitedBy
+                )
+              )
+            )
+          );
+
+        allow delete: if isEventOwnerById(eventId) ||
+          isAdmin() ||
+          (isSignedIn() && request.auth.uid == participantId);
+      }
+    }
+
+    match /postComments/{commentId} {
+      allow read: if isSignedIn();
+
+      allow create: if isSignedIn() &&
+        validPostCommentPayload() &&
+        validPostCommentModerationDefaults();
+
+      allow update: if isSignedIn() &&
+        request.resource.data.userId == resource.data.userId &&
+        request.resource.data.postId == resource.data.postId &&
+        request.resource.data.text is string &&
+        request.resource.data.text.size() > 0 &&
+        (
+          (request.auth.uid == resource.data.userId && postCommentModerationUnchanged()) ||
+          isAdmin()
+        );
+
+      allow delete: if isSignedIn() &&
+        (request.auth.uid == resource.data.userId || isAdmin());
+    }
+
+    match /likes/{likeId} {
+      allow read: if isSignedIn();
+
+      allow create: if isSignedIn() &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.postId is string &&
+        request.resource.data.postId.size() > 0 &&
+        request.resource.data.postType in ['spot', 'drone', 'event', 'ad'] &&
+        validLikeDocId(likeId);
+
+      allow update: if false;
+      allow delete: if isSignedIn() && request.auth.uid == resource.data.userId;
+    }
+
+    match /reports/{reportId} {
+      allow read: if isAdmin() ||
+        (isSignedIn() && request.auth.uid == resource.data.createdBy);
+
+      allow create: if isSignedIn() &&
+        request.resource.data.createdBy == request.auth.uid &&
+        request.resource.data.targetType in ['spot', 'review', 'post', 'postComment', 'user'] &&
+        request.resource.data.targetId is string &&
+        request.resource.data.targetId.size() > 0 &&
+        request.resource.data.reasons is list &&
+        request.resource.data.reasons.size() > 0;
+
+      allow update, delete: if isAdmin();
+    }
+
+    match /affiliateStores/{storeId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /affiliateStoreGroups/{groupId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /affiliateOffers/{offerId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /affiliateClicks/{clickId} {
+      allow read: if false;
+      allow create: if isSignedIn() &&
+        request.resource.data.storeId is string &&
+        request.resource.data.storeId.size() > 0 &&
+        request.resource.data.storeName is string &&
+        request.resource.data.storeName.size() > 0 &&
+        request.resource.data.source is string &&
+        request.resource.data.userId == request.auth.uid;
+    }
+  }
+}

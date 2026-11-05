@@ -5,13 +5,21 @@ require('react-native-gesture-handler/jestSetup');
 jest.mock('react-native-vector-icons/MaterialCommunityIcons', () => 'Icon');
 jest.mock('react-native-vector-icons/FontAwesome', () => 'Icon');
 
+// Mock AsyncStorage native module.
+jest.mock(
+  '@react-native-async-storage/async-storage',
+  () => require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
+);
+
 // Mock Google Mobile Ads native module.
 jest.mock('react-native-google-mobile-ads', () => {
   const mockInstance = {
     initialize: jest.fn().mockResolvedValue({}),
+    setRequestConfiguration: jest.fn().mockResolvedValue({}),
   };
   const mobileAds = () => mockInstance;
   mobileAds.initialize = mockInstance.initialize;
+    mobileAds.setRequestConfiguration = mockInstance.setRequestConfiguration;
 
   const createAdMock = () => ({
     load: jest.fn(),
@@ -21,6 +29,12 @@ jest.mock('react-native-google-mobile-ads', () => {
 
   const mockInterstitial = createAdMock();
   const mockRewarded = createAdMock();
+  const mockConsentInfo = {
+    status: 'NOT_REQUIRED',
+    canRequestAds: true,
+    privacyOptionsRequirementStatus: 'NOT_REQUIRED',
+    isConsentFormAvailable: false,
+  };
 
   return {
     __esModule: true,
@@ -34,11 +48,26 @@ jest.mock('react-native-google-mobile-ads', () => {
       LOADED: 'loaded',
       EARNED_REWARD: 'earned_reward',
     },
+    AdsConsentPrivacyOptionsRequirementStatus: {
+      UNKNOWN: 'UNKNOWN',
+      REQUIRED: 'REQUIRED',
+      NOT_REQUIRED: 'NOT_REQUIRED',
+    },
+    AdsConsent: {
+      requestInfoUpdate: jest.fn().mockResolvedValue(mockConsentInfo),
+      loadAndShowConsentFormIfRequired: jest.fn().mockResolvedValue(mockConsentInfo),
+      getConsentInfo: jest.fn().mockResolvedValue(mockConsentInfo),
+      showPrivacyOptionsForm: jest.fn().mockResolvedValue(mockConsentInfo),
+      reset: jest.fn(),
+    },
     InterstitialAd: {
       createForAdRequest: jest.fn(() => mockInterstitial),
     },
     RewardedAd: {
       createForAdRequest: jest.fn(() => mockRewarded),
+    },
+    AppOpenAd: {
+      createForAdRequest: jest.fn(() => createAdMock()),
     },
   };
 });
@@ -68,10 +97,12 @@ jest.mock('react-native-image-viewing', () => {
 jest.mock('react-native-purchases', () => {
   const mockEntitlements = {active: {}};
   const defaultMock = {
+    LOG_LEVEL: {DEBUG: 'DEBUG'},
     configure: jest.fn(),
     setLogLevel: jest.fn(),
     logIn: jest.fn(),
     logOut: jest.fn(),
+    getCustomerInfo: jest.fn().mockResolvedValue({entitlements: mockEntitlements}),
     getOfferings: jest.fn().mockResolvedValue({current: {availablePackages: []}}),
     purchasePackage: jest.fn().mockResolvedValue({customerInfo: {entitlements: mockEntitlements}}),
     restorePurchases: jest.fn().mockResolvedValue({entitlements: mockEntitlements}),
@@ -109,17 +140,50 @@ jest.mock('@react-native-firebase/messaging', () => {
     onNotificationOpenedApp: jest.fn().mockReturnValue(() => {}),
     getInitialNotification: jest.fn().mockResolvedValue(null),
     onTokenRefresh: jest.fn().mockReturnValue(() => {}),
+    onMessage: jest.fn().mockReturnValue(() => {}),
+    setBackgroundMessageHandler: jest.fn(),
+    requestPermission: jest.fn().mockResolvedValue(1),
+    getToken: jest.fn().mockResolvedValue('test-token'),
+    deleteToken: jest.fn().mockResolvedValue(undefined),
   };
 
   const messaging = () => mockMessagingInstance;
+  const getMessaging = jest.fn(() => mockMessagingInstance);
   messaging.AuthorizationStatus = {
     AUTHORIZED: 1,
     DENIED: 2,
+    PROVISIONAL: 3,
   };
 
   return {
     __esModule: true,
     default: messaging,
+    getMessaging,
+    onNotificationOpenedApp: jest.fn((_instance, listener) =>
+      mockMessagingInstance.onNotificationOpenedApp(listener),
+    ),
+    getInitialNotification: jest.fn(() =>
+      mockMessagingInstance.getInitialNotification(),
+    ),
+    onTokenRefresh: jest.fn((_instance, listener) =>
+      mockMessagingInstance.onTokenRefresh(listener),
+    ),
+    onMessage: jest.fn((_instance, listener) =>
+      mockMessagingInstance.onMessage(listener),
+    ),
+    setBackgroundMessageHandler: jest.fn((_instance, handler) =>
+      mockMessagingInstance.setBackgroundMessageHandler(handler),
+    ),
+    requestPermission: jest.fn(() =>
+      mockMessagingInstance.requestPermission(),
+    ),
+    getToken: jest.fn(() =>
+      mockMessagingInstance.getToken(),
+    ),
+    deleteToken: jest.fn(() =>
+      mockMessagingInstance.deleteToken(),
+    ),
+    AuthorizationStatus: messaging.AuthorizationStatus,
     FirebaseMessagingTypes: {},
   };
 });
@@ -154,7 +218,6 @@ jest.mock('@react-native-firebase/firestore', () => {
   const noop = (..._args) => {};
   const mockGetDoc = jest.fn().mockResolvedValue({exists: false, data: () => ({})});
   const mockGetDocs = jest.fn().mockResolvedValue({docs: []});
-  const mockTransaction = jest.fn();
   const GeoPoint = function(latitude, longitude) {
     this.latitude = latitude;
     this.longitude = longitude;
@@ -186,10 +249,16 @@ jest.mock('@react-native-firebase/firestore', () => {
 jest.mock('@react-native-firebase/auth', () => {
   const authInstance = {currentUser: null};
   const getAuth = jest.fn(() => authInstance);
+  const onAuthStateChanged = jest.fn((_auth, callback) => {
+    // Immediately emit a null user to resolve loading state in tests.
+    callback?.(null);
+    return jest.fn();
+  });
   return {
     __esModule: true,
     default: getAuth,
     getAuth,
+    onAuthStateChanged,
   };
 });
 
@@ -204,6 +273,36 @@ jest.mock('@react-native-firebase/storage', () => {
   };
 });
 
+// Mock Firebase Crashlytics.
+jest.mock('@react-native-firebase/crashlytics', () => {
+  const crashlyticsInstance = {
+    log: jest.fn(),
+    recordError: jest.fn(),
+    setUserId: jest.fn().mockResolvedValue(null),
+    setAttributes: jest.fn().mockResolvedValue(null),
+    setCrashlyticsCollectionEnabled: jest.fn().mockResolvedValue(null),
+  };
+  return {
+    __esModule: true,
+    default: () => crashlyticsInstance,
+    getCrashlytics: jest.fn(() => crashlyticsInstance),
+    log: jest.fn((_instance, message) => crashlyticsInstance.log(message)),
+    setUserId: jest.fn((_instance, userId) => crashlyticsInstance.setUserId(userId)),
+    setCrashlyticsCollectionEnabled: jest.fn((_instance, enabled) =>
+      crashlyticsInstance.setCrashlyticsCollectionEnabled(enabled),
+    ),
+  };
+});
+
+// Mock Firebase App module helpers.
+jest.mock('@react-native-firebase/app', () => {
+  const app = {name: '[DEFAULT]'};
+  return {
+    __esModule: true,
+    getApp: jest.fn(() => app),
+  };
+});
+
 // Mock Geolocation to avoid native module lookup.
 jest.mock('@react-native-community/geolocation', () => ({
   __esModule: true,
@@ -215,3 +314,97 @@ jest.mock('@react-native-community/geolocation', () => ({
     stopObserving: jest.fn(),
   },
 }));
+
+// Short-circuit permission helpers to avoid async side effects in tests.
+jest.mock('./src/utils/permissions', () => ({
+  __esModule: true,
+  requestEssentialPermissions: jest.fn().mockResolvedValue(undefined),
+  requestLocationPermission: jest.fn().mockResolvedValue(true),
+}));
+
+// Stub App Open Ad manager to avoid async side-effects in tests.
+jest.mock('./src/services/appOpenAdManager', () => {
+  const defaultState = {
+    isLoaded: false,
+    isLoading: false,
+    isShowing: false,
+    hasAttemptedToShow: false,
+    hasShown: false,
+    lastError: null,
+  };
+
+  return {
+    __esModule: true,
+    appOpenAdManager: {
+      configureRequestOptions: jest.fn().mockResolvedValue(undefined),
+      initialize: jest.fn(),
+      loadAd: jest.fn(),
+      showAdIfAvailable: jest.fn(() => false),
+      subscribe: jest.fn((listener) => {
+        // useSyncExternalStore expects subscribe to return an unsubscribe.
+        if (listener && typeof listener === 'function') {
+          listener();
+        }
+        return () => {};
+      }),
+      getState: jest.fn(() => defaultState),
+    },
+  };
+});
+
+// Mock Firebase App Check (ESM/native).
+jest.mock('@react-native-firebase/app-check', () => {
+  class ReactNativeFirebaseAppCheckProvider {
+    configure() {}
+  }
+
+  return {
+    __esModule: true,
+    default: () => ({
+      activate: jest.fn().mockResolvedValue(undefined),
+    }),
+    initializeAppCheck: jest.fn().mockResolvedValue({}),
+    ReactNativeFirebaseAppCheckProvider,
+  };
+});
+
+// Mock react-native-fs to avoid Flow syntax parse errors in tests.
+jest.mock('react-native-fs', () => {
+  const mockRead = jest.fn().mockResolvedValue('{}');
+  return {
+    __esModule: true,
+    default: {
+      readFile: mockRead,
+      readFileAssets: mockRead,
+    },
+  };
+});
+
+// Mock image picker (ESM/native).
+jest.mock('react-native-image-picker', () => {
+  const mockResponse = {assets: []};
+  return {
+    __esModule: true,
+    launchImageLibrary: jest.fn((_options, cb) => cb?.(mockResponse)),
+    launchCamera: jest.fn((_options, cb) => cb?.(mockResponse)),
+  };
+});
+
+// Mock compressor (native).
+jest.mock('react-native-compressor', () => {
+  const Video = {
+    compress: jest.fn(async (uri) => uri),
+  };
+  return {__esModule: true, Video};
+});
+
+// Mock react-native-dialog (ESM).
+jest.mock('react-native-dialog', () => {
+  const React = require('react');
+  const Dialog = (props) => React.createElement('Dialog', props, props.children);
+  Dialog.Container = (props) => React.createElement('DialogContainer', props, props.children);
+  Dialog.Title = (props) => React.createElement('DialogTitle', props, props.children);
+  Dialog.Description = (props) => React.createElement('DialogDescription', props, props.children);
+  Dialog.Button = (props) => React.createElement('DialogButton', props, props.children);
+  return {__esModule: true, default: Dialog, ...Dialog};
+});

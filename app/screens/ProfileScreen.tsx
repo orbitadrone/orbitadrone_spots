@@ -1,10 +1,9 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TextInput,
-  Button,
   Alert,
   ActivityIndicator,
   ScrollView,
@@ -26,6 +25,7 @@ import {
   setPilotMarker,
   clearPilotMarker,
   PilotMarkerPayload,
+  isCurrentUserAdmin,
 } from '../../src/services/firestoreService';
 import { auth } from '../../src/firebaseConfig';
 import { uploadImage } from '../../src/services/storageService';
@@ -33,19 +33,29 @@ import ImagePicker from 'react-native-image-crop-picker';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { sendPasswordResetEmail, signOut, EmailAuthProvider } from '@react-native-firebase/auth';
 import LanguageSelector from '../components/LanguageSelector';
-import Purchases from 'react-native-purchases';
 import Toast from 'react-native-toast-message';
 
 import { flightStylesOptions } from '../../src/constants/flightStyles';
 
 import RemoveAdsModal from '../components/RemoveAdsModal';
+import AffiliateStoreSheet from '../components/AffiliateStoreSheet';
 import { useAuthContext } from '../context/AuthContext';
 import { useAds } from '../context/AdContext';
 import { adManager } from '../../src/services/adManager';
+import {useAdsDiagnostics} from '../../src/hooks/useAdsDiagnostics';
 import MapView, { Marker, MapPressEvent, Region } from 'react-native-maps';
 import Geolocation from '@react-native-community/geolocation';
 import { requestLocationPermission } from '../../src/utils/permissions';
 import { geocode } from '../../src/utils/geocoding';
+import CustomButton from '../components/CustomButton';
+import { palette, radii, shadows } from '../../src/constants/theme';
+import logger from '../../src/utils/logger';
+import {
+  SocialPost,
+  getLikesReceivedSummaryForPostIds,
+  getSocialPostsByUser,
+} from '../../src/services/socialService';
+import type {MainTabScreenNavigationProp} from '../../src/navigation/types';
 
 const pilotTypeCanonicalMap: Record<string, string> = {
   piloto: 'pilot',
@@ -108,10 +118,22 @@ const DEFAULT_MODAL_REGION: Region = {
 
 const ProfileScreen = () => {
   const { t } = useTranslation();
-  const navigation = useNavigation();
+  const navigation = useNavigation<MainTabScreenNavigationProp<'Profile'>>();
   
   const { user } = useAuthContext();
-  const { disableAdsForSession } = useAds();
+  const {
+    canRequestAds,
+    consentError,
+    disableAdsForSession,
+    isConsentErrorRetryable,
+    isConsentReady,
+    isGatheringConsent,
+    isPremium,
+    isPrivacyOptionsRequired,
+    openPrivacyOptions,
+    refreshConsent,
+  } = useAds();
+  const adsDiagnostics = useAdsDiagnostics();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   
@@ -128,6 +150,89 @@ const ProfileScreen = () => {
   const [password, setPassword] = useState('');
   const [reauthLoading, setReauthLoading] = useState(false);
   const [isRemoveAdsModalVisible, setRemoveAdsModalVisible] = useState(false);
+  const [isStoreMenuVisible, setStoreMenuVisible] = useState(false);
+  const [isAdminUser, setIsAdminUser] = useState(false);
+  const [likesLoading, setLikesLoading] = useState(false);
+  const [likesReceivedTotal, setLikesReceivedTotal] = useState(0);
+  const [likesByPost, setLikesByPost] = useState<Array<{postId: string; type: SocialPost['type']; likes: number}>>([]);
+
+  const latestPlacementErrorText = useMemo(() => {
+    const placementLabels: Record<string, string> = {
+      feedBanner: t('adsPrivacy.placements.feedBanner'),
+      interstitial: t('adsPrivacy.placements.interstitial'),
+      rewarded: t('adsPrivacy.placements.rewarded'),
+      appOpen: t('adsPrivacy.placements.appOpen'),
+    };
+
+    const latestPlacement = (Object.entries(adsDiagnostics.placements) as Array<
+      [
+        string,
+        {
+          lastErrorCode: string | null;
+          lastErrorMessage: string | null;
+          lastEventAt: number | null;
+        },
+      ]
+    >)
+      .filter(([, diagnostics]) => Boolean(diagnostics.lastErrorMessage))
+      .sort((left, right) => (right[1].lastEventAt ?? 0) - (left[1].lastEventAt ?? 0))[0];
+
+    if (!latestPlacement) {
+      return null;
+    }
+
+    const [placementKey, diagnostics] = latestPlacement;
+    const prefix = placementLabels[placementKey] ?? placementKey;
+    const code = diagnostics.lastErrorCode ? `${diagnostics.lastErrorCode} · ` : '';
+    return `${prefix}: ${code}${diagnostics.lastErrorMessage ?? ''}`;
+  }, [adsDiagnostics.placements, t]);
+
+  const adsStatusMessage = useMemo(() => {
+    if (isPremium) {
+      return t('adsPrivacy.premiumDisabledDescription');
+    }
+    if (isGatheringConsent || !isConsentReady) {
+      return t('adsPrivacy.preparingDescription');
+    }
+    if (consentError) {
+      return isConsentErrorRetryable
+        ? t('adsPrivacy.syncErrorDescription')
+        : t('adsPrivacy.configErrorDescription');
+    }
+    if (!canRequestAds && isPrivacyOptionsRequired) {
+      return t('adsPrivacy.rewardBlockedDescription');
+    }
+    if (!canRequestAds) {
+      return t('adsPrivacy.temporarilyUnavailableDescription');
+    }
+    if (!adsDiagnostics.sdk.initialized) {
+      return adsDiagnostics.sdk.initErrorMessage
+        ? t('adsPrivacy.sdkErrorDescription')
+        : t('adsPrivacy.sdkPreparingDescription');
+    }
+    return t('adsPrivacy.availableDescription');
+  }, [
+    adsDiagnostics.sdk.initErrorMessage,
+    adsDiagnostics.sdk.initialized,
+    canRequestAds,
+    consentError,
+    isConsentErrorRetryable,
+    isConsentReady,
+    isGatheringConsent,
+    isPremium,
+    isPrivacyOptionsRequired,
+    t,
+  ]);
+
+  const adsLastErrorText = useMemo(() => {
+    if (consentError?.message) {
+      return consentError.message;
+    }
+    if (adsDiagnostics.sdk.initErrorMessage) {
+      return adsDiagnostics.sdk.initErrorMessage;
+    }
+    return latestPlacementErrorText;
+  }, [adsDiagnostics.sdk.initErrorMessage, consentError, latestPlacementErrorText]);
 
   const fetchProfile = useCallback(async (uid: string) => {
     setLoading(true);
@@ -144,20 +249,84 @@ const ProfileScreen = () => {
         setProfile({});
       }
     } catch (error) {
-      console.error("Error fetching profile: ", error);
+      logger.error('Error fetching profile', error);
       Alert.alert(t('alerts.error'), t('alerts.fetchProfileError'));
     } finally {
       setLoading(false);
     }
   }, [t]);
 
+  const fetchLikesSummary = useCallback(async (uid: string) => {
+    setLikesLoading(true);
+    try {
+      const posts = await getSocialPostsByUser(uid, {includeHidden: true});
+      const postIds = posts
+        .map(post => post.id)
+        .filter((postId): postId is string => Boolean(postId));
+      if (!postIds.length) {
+        setLikesReceivedTotal(0);
+        setLikesByPost([]);
+        return;
+      }
+
+      const summary = await getLikesReceivedSummaryForPostIds(postIds);
+      const list = postIds.map(postId => {
+        const post = posts.find(item => item.id === postId);
+        return {
+          postId,
+          type: post?.type ?? 'drone',
+          likes: summary[postId] ?? 0,
+        };
+      });
+      list.sort((a, b) => b.likes - a.likes);
+      setLikesByPost(list.filter(item => item.likes > 0).slice(0, 5));
+      setLikesReceivedTotal(
+        Object.values(summary).reduce((acc, likes) => acc + Number(likes || 0), 0),
+      );
+    } catch (error) {
+      logger.warn('[Profile] fetch likes summary failed', error);
+      setLikesReceivedTotal(0);
+      setLikesByPost([]);
+    } finally {
+      setLikesLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (user) {
       fetchProfile(user.uid);
+      fetchLikesSummary(user.uid);
     } else {
       setLoading(false);
+      setLikesReceivedTotal(0);
+      setLikesByPost([]);
     }
-  }, [user, fetchProfile]);
+  }, [user, fetchLikesSummary, fetchProfile]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const checkAdminStatus = async () => {
+      if (!user) {
+        setIsAdminUser(false);
+        return;
+      }
+      try {
+        const hasAdminAccess = await isCurrentUserAdmin();
+        if (!cancelled) {
+          setIsAdminUser(hasAdminAccess);
+        }
+      } catch (adminError) {
+        if (!cancelled) {
+          setIsAdminUser(false);
+        }
+        logger.warn('[Profile] admin check failed', adminError);
+      }
+    };
+    checkAdminStatus();
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
 
   const handleChoosePhoto = (type: 'profile' | 'background') => {
     const pickerOptions = {
@@ -254,7 +423,7 @@ const ProfileScreen = () => {
       await saveUserProfile(user.uid, profileDataToSave);
       Alert.alert(t('alerts.success'), t('alerts.profileSaved'));
     } catch (error) {
-      console.error("Error saving profile:", error);
+      logger.error('Error saving profile', error);
       Alert.alert(t('alerts.error'), t('alerts.saveProfileError'));
     } finally {
       setSaving(false);
@@ -266,14 +435,14 @@ const ProfileScreen = () => {
       try {
         await sendPasswordResetEmail(auth, user.email);
         Alert.alert(t('alerts.passwordResetEmailSentTitle'), t('alerts.passwordResetEmailSentMessage', { email: user.email }));
-      } catch (error: any) {
+      } catch {
         Alert.alert(t('alerts.error'), t('alerts.passwordResetError'));
       }
     }
   };
 
   const handleLogout = () => {
-    signOut(auth).catch(error => Alert.alert(t('alerts.error'), t('alerts.logoutError')));
+    signOut(auth).catch(() => Alert.alert(t('alerts.error'), t('alerts.logoutError')));
   };
 
   const openCancelSubscriptionModal = () => {
@@ -290,7 +459,7 @@ const ProfileScreen = () => {
       }
       setCancelSubscriptionModalVisible(false);
     } catch (error) {
-      console.error('[Profile] manageSubscriptions failed', error);
+      logger.error('[Profile] manageSubscriptions failed', error);
       Alert.alert(t('alerts.error'), t('alerts.manageSubscriptionError'));
     }
   };
@@ -315,7 +484,7 @@ const ProfileScreen = () => {
     } catch (error: any) {
       if (error.code === 'auth/wrong-password') Alert.alert(t('alerts.error'), t('alerts.wrongPasswordError'));
       else Alert.alert(t('alerts.error'), t('alerts.reauthFailedError'));
-      console.error(error);
+      logger.error('[Profile] delete account failed', error);
     } finally {
       setReauthLoading(false);
       setPassword('');
@@ -347,7 +516,7 @@ const ProfileScreen = () => {
       await clearPilotMarker(user.uid);
       setProfile(p => ({ ...p, pilotMarker: undefined }));
     } catch (error) {
-      console.error('[Profile] clearPilotMarker failed', error);
+      logger.error('[Profile] clearPilotMarker failed', error);
       Alert.alert(t('alerts.error'), t('alerts.error'));
     }
   };
@@ -411,7 +580,7 @@ const ProfileScreen = () => {
         setPilotMarkerModalKey(prev => prev + 1);
       },
       error => {
-        console.error('[Profile] current location failed', error);
+        logger.error('[Profile] current location failed', error);
         Alert.alert(t('alerts.error'), t('alerts.locationError'));
       },
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 1000 },
@@ -430,13 +599,18 @@ const ProfileScreen = () => {
       const result = await geocode(pilotMarkerDraft.latitude, pilotMarkerDraft.longitude);
       formattedAddress = result?.formatted_address ?? null;
     } catch (error) {
-      console.warn('[Profile] geocode failed', error);
+      logger.warn('[Profile] geocode failed', error);
     }
     try {
       await setPilotMarker(user.uid, pilotMarkerDraft);
       setProfile(p => ({
         ...p,
-        pilotMarker: pilotMarkerDraft,
+        pilotMarker: {
+          latitude: pilotMarkerDraft.latitude,
+          longitude: pilotMarkerDraft.longitude,
+          iconType: 'avatar',
+          iconValue: null,
+        },
         cityRegion: formattedAddress ?? p.cityRegion,
       }));
       Toast.show({
@@ -450,7 +624,7 @@ const ProfileScreen = () => {
       setPilotMarkerModalVisible(false);
       await fetchProfile(user.uid);
     } catch (error) {
-      console.error('[Profile] setPilotMarker failed', error);
+      logger.error('[Profile] setPilotMarker failed', error);
       Alert.alert(t('alerts.error'), t('alerts.error'));
     } finally {
       setPilotMarkerSaving(false);
@@ -464,10 +638,15 @@ const ProfileScreen = () => {
 
   return (
     <ScrollView style={styles.container}>
+      {navigation.canGoBack() && (
+        <TouchableOpacity style={styles.closeButton} onPress={() => navigation.goBack()}>
+          <Icon name="close" size={22} color={palette.textPrimary} />
+        </TouchableOpacity>
+      )}
       <Text style={styles.title}>{t('profile.title')}</Text>
 
       <View style={styles.profileHeader}>
-        <TouchableOpacity style={{ width: '100%' }} onPress={() => handleChoosePhoto('background')}>
+        <TouchableOpacity style={styles.fullWidth} onPress={() => handleChoosePhoto('background')}>
           <ImageBackground style={styles.backgroundImage} source={profile.backgroundPictureUrl ? { uri: profile.backgroundPictureUrl } : null} resizeMode="cover">
             {!profile.backgroundPictureUrl && <Text style={styles.placeholderText}>{t('profile.addBackgroundPhoto')}</Text>}
           </ImageBackground>
@@ -480,10 +659,60 @@ const ProfileScreen = () => {
       </View>
 
       <View style={styles.formContainer}>
-        <View style={{marginBottom: 10}}>
-          <Button title={t('profile.viewPublicProfileButton')} onPress={() => navigation.navigate('UserProfile' as never, { userId: user.uid } as never)} />
+        <View style={styles.publicProfileButtonWrapper}>
+          <CustomButton
+            title={t('profile.viewPublicProfileButton')}
+            variant="outline"
+            onPress={() => navigation.navigate('UserProfile', { userId: user.uid })}
+          />
         </View>
-        <Button title={t('profile.mySpotsButton')} onPress={() => navigation.navigate('MySpots')} />
+        <CustomButton
+          title={t('profile.mySpotsButton')}
+          style={styles.mySpotsButton}
+          onPress={() => navigation.navigate('MySpots')}
+        />
+
+        <View style={styles.likesCard}>
+          <Text style={styles.sectionHeading}>{t('profile.likesSectionTitle')}</Text>
+          <Text style={styles.likesTotal}>
+            {t('profile.likesTotalReceived', {count: likesReceivedTotal})}
+          </Text>
+          {likesLoading ? (
+            <ActivityIndicator size="small" color={palette.highlight} />
+          ) : likesByPost.length ? (
+            likesByPost.map((item, index) => (
+              <View key={item.postId} style={styles.likesRow}>
+                <Text style={styles.likesLabel}>
+                  {item.type === 'spot'
+                    ? t('profile.likesSpotLabel', {index: index + 1})
+                    : t('profile.likesDroneLabel', {index: index + 1})}
+                </Text>
+                <Text style={styles.likesValue}>❤️ {item.likes}</Text>
+              </View>
+            ))
+          ) : (
+            <Text style={styles.likesEmpty}>{t('profile.likesNoData')}</Text>
+          )}
+        </View>
+
+        <View style={styles.storeSection}>
+          <View style={styles.storeHeader}>
+            <View style={styles.storeInfo}>
+              <Text style={styles.sectionHeading}>{t('affiliateStores.title')}</Text>
+              <Text style={styles.storeSubtext}>
+                {t('affiliateStores.subtitle')}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.storeButton}
+              onPress={() => setStoreMenuVisible(true)}>
+              <Icon name="shopping-outline" size={18} color="#fff" />
+              <Text style={styles.storeButtonText}>
+                {t('affiliateStores.button')}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
 
         <Text style={styles.label}>{t('profile.displayNameLabel')}</Text>
         <TextInput style={styles.input} value={profile.displayName} onChangeText={text => setProfile(p => ({ ...p, displayName: text }))} placeholder={t('profile.displayNamePlaceholder')} />
@@ -575,41 +804,110 @@ const ProfileScreen = () => {
           <TextInput style={styles.socialInput} value={profile.socials?.email || ''} onChangeText={text => updateSocial('email', text)} placeholder={t('profile.contactEmailPlaceholder')} keyboardType="email-address" />
         </View>
 
-        <Button title={t('profile.saveButton')} onPress={handleSaveProfile} disabled={saving} />
+        <CustomButton title={t('profile.saveButton')} onPress={handleSaveProfile} disabled={saving} />
         {saving && <ActivityIndicator style={styles.activityIndicator} size="small" />}
 
         <View style={styles.actionsSection}>
           <LanguageSelector />
+          {isAdminUser && (
+            <View style={styles.actionButtonContainer}>
+              <CustomButton
+                title={t('profile.adminPanelButton')}
+                variant="outline"
+                color="#0f766e"
+                textColor="#0f766e"
+                onPress={() => navigation.navigate('AdminPanel')}
+              />
+            </View>
+          )}
+          {!isPremium ? (
+            <>
+              <View style={styles.actionButtonContainer}>
+                <CustomButton
+                  title={t('removeAds.title')}
+                  variant="outline"
+                  color="#22c55e"
+                  textColor="#22c55e"
+                  onPress={() => setRemoveAdsModalVisible(true)}
+                />
+              </View>
+              <View style={styles.adsStatusCard}>
+                <Text style={styles.sectionHeading}>{t('adsPrivacy.statusTitle')}</Text>
+                <Text style={styles.adsStatusText}>{adsStatusMessage}</Text>
+                {adsLastErrorText ? (
+                  <Text style={styles.adsStatusMeta}>
+                    {t('adsPrivacy.lastErrorLabel')}: {adsLastErrorText}
+                  </Text>
+                ) : null}
+                {(consentError && isConsentErrorRetryable) || !isConsentReady ? (
+                  <View style={styles.actionButtonContainer}>
+                    <CustomButton
+                      title={t('adsPrivacy.retryButton')}
+                      variant="outline"
+                      color="#2563eb"
+                      textColor="#2563eb"
+                      disabled={isGatheringConsent}
+                      onPress={() => {
+                        refreshConsent().catch(error => {
+                          logger.error('[Profile] refreshConsent failed', error);
+                          Alert.alert(t('alerts.error'), t('adsPrivacy.retryError'));
+                        });
+                      }}
+                    />
+                  </View>
+                ) : null}
+              </View>
+            </>
+          ) : null}
           <View style={styles.actionButtonContainer}>
-            <Button title={t('removeAds.title')} color="#2ecc71" onPress={() => setRemoveAdsModalVisible(true)} />
+            <CustomButton
+              title={t('profile.changePasswordButton')}
+              variant="outline"
+              onPress={handlePasswordReset}
+            />
           </View>
           <View style={styles.actionButtonContainer}>
-            <Button title={t('profile.changePasswordButton')} color="#3498db" onPress={handlePasswordReset} />
-          </View>
-          <View style={styles.actionButtonContainer}>
-            <Button title={t('profile.logoutButton')} color="orange" onPress={handleLogout} />
+            <CustomButton
+              title={t('profile.logoutButton')}
+              variant="outline"
+              onPress={handleLogout}
+            />
           </View>
           <View style={styles.accountSection}>
             <Text style={styles.sectionHeading}>{t('profile.accountSectionTitle')}</Text>
+            {isPrivacyOptionsRequired ? (
+              <View style={styles.actionButtonContainer}>
+                <CustomButton
+                  title={t('adsPrivacy.manageChoicesButton')}
+                  variant="outline"
+                  color="#2563eb"
+                  textColor="#2563eb"
+                  onPress={() => {
+                    openPrivacyOptions().catch(error => {
+                      logger.error('[Profile] openPrivacyOptions failed', error);
+                      Alert.alert(t('alerts.error'), t('adsPrivacy.openError'));
+                    });
+                  }}
+                />
+              </View>
+            ) : null}
             <View style={styles.actionButtonContainer}>
-            <TouchableOpacity
-                style={[styles.subtleButton, styles.subtleButtonPrimary]}
+              <CustomButton
+                title={t('profile.manageSubscriptionButton')}
+                variant="outline"
+                color="#e53935"
+                textColor="#e53935"
                 onPress={openCancelSubscriptionModal}
-              >
-                <Text style={[styles.subtleButtonText, styles.subtleButtonPrimaryText]}>
-                  {t('profile.manageSubscriptionButton')}
-                </Text>
-              </TouchableOpacity>
+              />
             </View>
             <View style={styles.actionButtonContainer}>
-              <TouchableOpacity
-                style={[styles.subtleButton, styles.subtleButtonDanger]}
+              <CustomButton
+                title={t('profile.deleteAccountButton')}
+                variant="outline"
+                color="#e53935"
+                textColor="#e53935"
                 onPress={handleDeleteAccountPress}
-              >
-                <Text style={[styles.subtleButtonText, styles.subtleButtonDangerText]}>
-                  {t('profile.deleteAccountButton')}
-                </Text>
-              </TouchableOpacity>
+              />
             </View>
           </View>
         </View>
@@ -635,12 +933,20 @@ const ProfileScreen = () => {
           );
         }}
       />
+      <AffiliateStoreSheet
+        visible={isStoreMenuVisible}
+        onClose={() => setStoreMenuVisible(false)}
+        source="profile"
+      />
       <Modal
         animationType="slide"
         visible={isPilotMarkerModalVisible}
         onRequestClose={closePilotMarkerModal}
       >
         <View style={styles.pilotMarkerModalContainer}>
+          <TouchableOpacity style={styles.pilotMarkerCloseButton} onPress={closePilotMarkerModal}>
+            <Icon name="close" size={22} color={palette.textPrimary} />
+          </TouchableOpacity>
           <Text style={styles.modalTitle}>{t('profile.pilotMarkerModalTitle')}</Text>
           <Text style={styles.pilotMarkerModalSubtitle}>{t('profile.pilotMarkerModalInstructions')}</Text>
           <MapView
@@ -664,9 +970,6 @@ const ProfileScreen = () => {
               <Text style={styles.pilotMarkerLinkText}>{t('profile.pilotMarkerUseCurrentLocation')}</Text>
             </TouchableOpacity>
             <View style={styles.pilotMarkerModalActions}>
-              <TouchableOpacity style={styles.pilotMarkerModalButton} onPress={closePilotMarkerModal}>
-                <Text style={styles.pilotMarkerButtonText}>{t('profile.pilotMarkerCancelButton')}</Text>
-              </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.pilotMarkerModalButton, styles.pilotMarkerModalButtonPrimary]}
                 onPress={handleSavePilotMarker}
@@ -724,7 +1027,7 @@ const ProfileScreen = () => {
                         if (error?.code === 'auth/wrong-password') {
                           Alert.alert(t('alerts.error'), t('alerts.wrongPasswordError'));
                         } else {
-                          console.error('[Profile] Subscription reauth failed', error);
+                          logger.error('[Profile] Subscription reauth failed', error);
                           Alert.alert(t('alerts.error'), t('alerts.reauthFailedError'));
                         }
                       } finally {
@@ -746,29 +1049,122 @@ const ProfileScreen = () => {
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
+  container: { flex: 1, backgroundColor: palette.backgroundLight },
+  fullWidth: { width: '100%' },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  title: { fontSize: 24, fontWeight: 'bold', marginVertical: 20, textAlign: 'center' },
+  title: { fontSize: 24, fontWeight: 'bold', marginVertical: 20, textAlign: 'center', color: palette.textPrimary },
   profileHeader: { marginBottom: 60, width: '100%' },
-  backgroundImage: { width: '100%', height: 150, backgroundColor: '#f0f0f0', justifyContent: 'center', alignItems: 'center' },
-  placeholderText: { color: '#888' },
+  backgroundImage: { width: '100%', height: 150, backgroundColor: palette.backgroundMuted, justifyContent: 'center', alignItems: 'center' },
+  placeholderText: { color: palette.textSecondary },
   profilePictureWrapper: { position: 'absolute', top: 100, alignSelf: 'center' },
-  profilePictureTouchable: { width: 100, height: 100, borderRadius: 50, backgroundColor: '#ccc', justifyContent: 'center', alignItems: 'center', borderWidth: 3, borderColor: '#fff' },
+  profilePictureTouchable: { width: 100, height: 100, borderRadius: 50, backgroundColor: palette.borderMuted, justifyContent: 'center', alignItems: 'center', borderWidth: 3, borderColor: palette.backgroundCard },
   profilePictureImage: { width: '100%', height: '100%', borderRadius: 50 },
   profilePicturePlaceholder: { justifyContent: 'center', alignItems: 'center' },
   formContainer: { paddingHorizontal: 20 },
-  label: { fontSize: 16, fontWeight: 'bold', marginTop: 16, marginBottom: 8 },
-  input: { height: 40, borderColor: 'gray', borderWidth: 1, borderRadius: 5, marginBottom: 12, paddingHorizontal: 8, color: '#000' },
+  publicProfileButtonWrapper: { marginBottom: 10 },
+  mySpotsButton: { marginBottom: 12 },
+  label: { fontSize: 16, fontWeight: 'bold', marginTop: 16, marginBottom: 8, color: palette.textPrimary },
+  input: { height: 44, borderColor: palette.borderLight, borderWidth: 1, borderRadius: radii.lg, marginBottom: 12, paddingHorizontal: 12, color: palette.textPrimary, backgroundColor: palette.backgroundCard, ...shadows.subtle },
   bioInput: { height: 100, textAlignVertical: 'top' },
+  likesCard: {
+    marginBottom: 16,
+    padding: 14,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: palette.borderLight,
+    backgroundColor: palette.backgroundCard,
+    ...shadows.subtle,
+  },
+  likesTotal: {
+    color: palette.textPrimary,
+    fontSize: 15,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  likesRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  likesLabel: {
+    color: palette.textSecondary,
+    fontSize: 13,
+  },
+  likesValue: {
+    color: palette.textPrimary,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  likesEmpty: {
+    color: palette.textMuted,
+    fontSize: 12,
+  },
+  storeSection: {
+    marginBottom: 16,
+    padding: 16,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: palette.borderLight,
+    backgroundColor: palette.backgroundCard,
+    ...shadows.subtle,
+  },
+  storeHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  storeInfo: {
+    flex: 1,
+    paddingRight: 12,
+  },
+  storeSubtext: {
+    marginTop: 4,
+    fontSize: 13,
+    color: palette.textSecondary,
+  },
+  storeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: radii.lg,
+    backgroundColor: palette.accent,
+  },
+  storeButtonText: {
+    marginLeft: 6,
+    color: '#fff',
+    fontWeight: '600',
+  },
   radioContainer: { flexDirection: 'row', justifyContent: 'space-between', flexWrap: 'wrap', marginBottom: 12 },
   radioButton: { flexDirection: 'row', alignItems: 'center', width: '48%', marginBottom: 8 },
   radioText: { fontSize: 16, flex: 1, flexWrap: 'wrap' },
-  socialInputContainer: { flexDirection: 'row', alignItems: 'center', borderColor: 'gray', borderWidth: 1, borderRadius: 5, marginBottom: 12, paddingHorizontal: 8 },
+  socialInputContainer: { flexDirection: 'row', alignItems: 'center', borderColor: palette.borderLight, borderWidth: 1, borderRadius: radii.lg, marginBottom: 12, paddingHorizontal: 12, backgroundColor: palette.backgroundCard, ...shadows.subtle },
   socialIcon: { marginRight: 10 },
-  socialInput: { flex: 1, height: 40, color: '#000' },
-  actionsSection: { marginTop: 10, borderTopWidth: 1, borderTopColor: '#eee', paddingTop: 10 },
+  socialInput: { flex: 1, height: 44, color: palette.textPrimary },
+  actionsSection: { marginTop: 10, borderTopWidth: 1, borderTopColor: palette.borderLight, paddingTop: 10 },
   actionButtonContainer: {
     marginBottom: 10,
+  },
+  adsStatusCard: {
+    marginBottom: 12,
+    padding: 14,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: palette.borderLight,
+    backgroundColor: palette.backgroundCard,
+    ...shadows.subtle,
+  },
+  adsStatusText: {
+    color: palette.textPrimary,
+    fontSize: 13,
+    lineHeight: 20,
+  },
+  adsStatusMeta: {
+    marginTop: 6,
+    color: palette.textSecondary,
+    fontSize: 12,
+    lineHeight: 18,
   },
   accountSection: { marginTop: 20 },
   sectionHeading: {
@@ -777,26 +1173,17 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     color: '#333',
   },
-  subtleButton: {
-    paddingVertical: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  subtleButtonPrimary: {
-    backgroundColor: '#e9e4f8',
-  },
-  subtleButtonDanger: {
-    backgroundColor: '#fbe9e9',
-  },
-  subtleButtonText: {
-    color: '#333',
-    fontWeight: '600',
-  },
-  subtleButtonPrimaryText: {
-    color: '#5a3db3',
-  },
-  subtleButtonDangerText: {
-    color: '#c0392b',
+  closeButton: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    backgroundColor: palette.backgroundCard,
+    borderRadius: radii.lg,
+    padding: 8,
+    borderWidth: 1,
+    borderColor: palette.borderLight,
+    ...shadows.subtle,
+    zIndex: 1,
   },
   stylesContainer: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginBottom: 20 },
   checkboxContainer: { flexDirection: 'row', alignItems: 'center', width: '48%', marginBottom: 10 },
@@ -817,15 +1204,16 @@ const styles = StyleSheet.create({
   pilotMarkerSection: {
     marginTop: 24,
     padding: 16,
-    borderRadius: 12,
+    borderRadius: radii.lg,
     borderWidth: 1,
-    borderColor: '#eee',
-    backgroundColor: '#f9f9f9',
+    borderColor: palette.borderLight,
+    backgroundColor: palette.backgroundCard,
+    ...shadows.subtle,
   },
   pilotMarkerInfo: {
     marginTop: 8,
     fontSize: 14,
-    color: '#333',
+    color: palette.textSecondary,
   },
   pilotMarkerActionRow: {
     flexDirection: 'row',
@@ -835,8 +1223,8 @@ const styles = StyleSheet.create({
   pilotMarkerButton: {
     flex: 1,
     paddingVertical: 10,
-    borderRadius: 8,
-    backgroundColor: '#007bff',
+    borderRadius: radii.lg,
+    backgroundColor: palette.accent,
     alignItems: 'center',
     marginRight: 8,
   },
@@ -845,27 +1233,43 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   pilotMarkerButtonDestructive: {
-    backgroundColor: '#e53935',
+    backgroundColor: palette.backgroundCard,
+    borderColor: '#e53935',
+    borderWidth: 1,
   },
   pilotMarkerButtonDestructiveText: {
-    color: '#fff',
+    color: '#e53935',
+  },
+  pilotMarkerCloseButton: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    backgroundColor: palette.backgroundCard,
+    borderRadius: radii.lg,
+    padding: 8,
+    borderWidth: 1,
+    borderColor: palette.borderLight,
+    ...shadows.subtle,
+    zIndex: 1,
   },
   pilotMarkerModalContainer: {
     flex: 1,
     paddingTop: 60,
     paddingHorizontal: 20,
-    backgroundColor: '#fff',
+    backgroundColor: palette.backgroundLight,
   },
   pilotMarkerModalSubtitle: {
     fontSize: 14,
-    color: '#555',
+    color: palette.textSecondary,
     marginBottom: 12,
     textAlign: 'center',
   },
   pilotMarkerModalMap: {
     height: 250,
-    borderRadius: 12,
+    borderRadius: radii.lg,
     marginBottom: 16,
+    borderWidth: 1,
+    borderColor: palette.borderLight,
   },
   pilotMarkerModalControls: {
     flex: 1,
@@ -874,24 +1278,33 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   pilotMarkerLinkText: {
-    color: '#007bff',
+    color: palette.highlight,
     fontWeight: '600',
   },
   pilotMarkerModalActions: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end',
     marginTop: 16,
   },
   pilotMarkerModalButton: {
     flex: 1,
     paddingVertical: 12,
-    borderRadius: 10,
-    backgroundColor: '#ccc',
+    borderRadius: radii.lg,
+    backgroundColor: palette.backgroundCard,
     alignItems: 'center',
-    marginRight: 8,
+    borderWidth: 1,
+    borderColor: palette.borderLight,
+    ...shadows.subtle,
   },
   pilotMarkerModalButtonPrimary: {
-    backgroundColor: '#007bff',
+    backgroundColor: palette.accent,
+    borderColor: palette.accent,
+  },
+  pilotMarkerModalButtonOutline: {
+    backgroundColor: 'transparent',
+  },
+  pilotMarkerButtonTextOutline: {
+    color: palette.textPrimary,
   },
 });
 

@@ -5,12 +5,10 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
     <uses-permission
         android:name="android.permission.POST_NOTIFICATIONS"
         tools:targetApi="33" />
     <uses-permission android:name="com.android.vending.BILLING" />
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <queries>
         <intent>
             <action android:name="android.intent.action.VIEW" />
@@ -25,19 +23,19 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32"
-        tools:replace="android:maxSdkVersion" />
+        tools:node="remove" />
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32"
-        tools:ignore="ScopedStorage"
-        tools:replace="android:maxSdkVersion" />
+        tools:node="remove" />
     <uses-permission
         android:name="android.permission.READ_MEDIA_IMAGES"
-        tools:targetApi="33" />
+        tools:node="remove" />
     <uses-permission
         android:name="android.permission.READ_MEDIA_VIDEO"
-        tools:targetApi="33" />
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.ACCESS_MEDIA_LOCATION"
+        tools:node="remove" />
 
     <application
       android:name=".MainApplication"
@@ -45,6 +43,8 @@
       android:icon="@mipmap/ic_launcher"
       android:roundIcon="@mipmap/ic_launcher_round"
       android:allowBackup="false"
+      android:fullBackupContent="@xml/backup_rules"
+      android:dataExtractionRules="@xml/data_extraction_rules"
       android:theme="@style/AppTheme"
       android:supportsRtl="true">
       <activity
@@ -81,7 +81,7 @@
         android:value="@string/google_maps_api_key" />
       <meta-data
         android:name="com.google.android.gms.ads.APPLICATION_ID"
-        android:value="ca-app-pub-7840437883541028~7369373412"
+        android:value="ca-app-pub-7840437883541028~5757372794"
         tools:replace="android:value" />
       <meta-data
         android:name="com.google.firebase.messaging.default_notification_icon"

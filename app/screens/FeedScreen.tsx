@@ -1,293 +1,313 @@
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {
-  ActivityIndicator,
   Alert,
   Animated,
-  Dimensions,
   FlatList,
   Image,
+  Linking,
   Modal,
   PanResponder,
-  Pressable,
+  Share,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   ViewToken,
   View,
 } from 'react-native';
 import MapView, {Marker, PROVIDER_GOOGLE, Region} from 'react-native-maps';
-import Geolocation from '@react-native-community/geolocation';
-import {useFocusEffect, useNavigation, useRoute} from '@react-navigation/native';
+import {useIsFocused, useNavigation, useRoute} from '@react-navigation/native';
 import {BannerAd, BannerAdSize} from 'react-native-google-mobile-ads';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import Video from 'react-native-video';
-import {Rating} from 'react-native-ratings';
 import {useTranslation} from 'react-i18next';
 
 import {useAuthContext} from '../context/AuthContext';
 import {useAds} from '../context/AdContext';
 import {useMap} from '../context/MapContext';
+import FeedPostCard from '../components/FeedPostCard';
 import {
   Spot,
   Review,
-  UserProfile,
   addReview,
   getReviewsForSpot,
-  getSpots,
-  getUserProfile,
 } from '../../src/services/firestoreService';
 import {
   PostComment,
-  PostType,
   SocialPost,
   addPostComment,
-  getLikesForPosts,
   getPostComments,
-  getSocialPosts,
   getSpotPostDocId,
   submitContentReport,
   togglePostLike,
 } from '../../src/services/socialService';
+import {joinPublicEvent} from '../../src/services/eventService';
 import {feedBannerAdUnitId} from '../../src/constants/adUnits';
-import {requestLocationPermission} from '../../src/utils/permissions';
+import {
+  buildGoogleMapsDirectionsUrl,
+  buildEventShareUrl,
+  buildPostShareUrl,
+  buildSpotShareUrl,
+  PLAY_STORE_URL,
+} from '../../src/constants/links';
 import {palette, shadows} from '../../src/constants/theme';
+import {adsDiagnosticsService} from '../../src/services/adsDiagnosticsService';
+import logger from '../../src/utils/logger';
+import {useFeedContent} from '../features/feed/useFeedContent';
+import {
+  ActiveLayer,
+  FEED_AD_FREQUENCY,
+  FEED_AUTOPLAY_CLEAR_DELAY_MS,
+  FEED_AUTOPLAY_SWITCH_DELAY_MS,
+  FEED_MEDIA_MIN_HEIGHT,
+  FEED_POST_PREFETCH_DELAY_MS,
+  FEED_POST_PREFETCH_WINDOW,
+  FEED_VIDEO_MIN_PREFETCH_ROWS,
+  FEED_VIDEO_PROBE_AHEAD,
+  FEED_VIDEO_WARMUP_RANGE_LAST_BYTE,
+  FEED_VIDEO_WARMUP_TIMEOUT_MS,
+  FeedRow,
+  FeedTab,
+  SHEET_MAX_HEIGHT,
+  SHEET_MID_HEIGHT,
+  SHEET_MIN_HEIGHT,
+  SHEET_PEEK_THRESHOLD,
+  UnifiedPost,
+  buildInlineBunnyIframeHtml,
+  calculateDistanceKm,
+  getBunnyEmbedForVideoUrl,
+  getFeedVideoHeight,
+  getFeedVideoPlaybackHeight,
+  getMeasuredVideoAspectRatio,
+  getOrderedViewablePostIds,
+  getOrderedViewableVideoPostIds,
+  getSpotCoordinates,
+  getTargetVisibleRowsForPostWindow,
+  getTimestampMillis,
+  getVideoPreviewImage,
+  pickWarmupVideoUrl,
+} from '../features/feed/feedShared';
+import {
+  buildVideoSourceCandidates,
+} from '../../src/utils/videoPlayback';
+import type {MainTabScreenNavigationProp, MainTabScreenProps} from '../../src/navigation/types';
 
-type FeedTab = 'all' | 'spots';
-type ActiveLayer = 'feed' | 'map';
+const FeedAdCard = ({label}: {label: string}) => {
+  useEffect(() => {
+    adsDiagnosticsService.recordLoadRequested('feedBanner');
+  }, []);
 
-type UnifiedPost = {
-  id: string;
-  type: Exclude<PostType, 'ad'>;
-  createdAtMs: number;
-  createdBy: string;
-  text: string;
-  images: string[];
-  videoUrl?: string;
-  thumbnailUrl?: string;
-  spot?: Spot;
-  sourcePost?: SocialPost;
-  featured?: boolean;
+  return (
+    <View style={styles.adCard}>
+      <Text style={styles.adLabel}>{label}</Text>
+      <BannerAd
+        unitId={feedBannerAdUnitId}
+        size={BannerAdSize.FULL_BANNER}
+        requestOptions={{requestNonPersonalizedAdsOnly: true}}
+        onAdLoaded={() => {
+          adsDiagnosticsService.recordLoaded('feedBanner');
+          logger.info('[Ads][FeedBanner] loaded');
+        }}
+        onAdFailedToLoad={error => {
+          adsDiagnosticsService.recordFailed('feedBanner', error);
+          logger.warn('[Ads][FeedBanner] failed to load', error);
+        }}
+        onAdOpened={() => {
+          adsDiagnosticsService.recordShown('feedBanner');
+        }}
+      />
+    </View>
+  );
 };
-
-type FeedRow =
-  | {kind: 'post'; post: UnifiedPost}
-  | {kind: 'ad'; id: string};
-
-const {height: SCREEN_HEIGHT, width: SCREEN_WIDTH} = Dimensions.get('window');
-
-const SHEET_MIN_HEIGHT = 76;
-const SHEET_MID_HEIGHT = Math.round(SCREEN_HEIGHT * 0.62);
-const SHEET_MAX_HEIGHT = Math.round(SCREEN_HEIGHT * 0.9);
-const SHEET_PEEK_THRESHOLD = SHEET_MIN_HEIGHT + 6;
-const FEED_AD_FREQUENCY = 4;
-const FEED_PRIMARY_TIMEOUT_MS = 12000;
-const FEED_SECONDARY_TIMEOUT_MS = 10000;
-
-const withTimeout = async <T,>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  label: string,
-): Promise<T> => {
-  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_, reject) => {
-        timeoutHandle = setTimeout(() => {
-          reject(new Error(`Timeout: ${label}`));
-        }, timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
-  }
-};
-
-const getTimestampMillis = (value: unknown): number => {
-  if (!value) {
-    return 0;
-  }
-  if (typeof value === 'number') {
-    return value;
-  }
-  if (typeof value === 'object') {
-    const timestamp = value as {
-      toDate?: () => Date;
-      seconds?: number;
-      nanoseconds?: number;
-    };
-    if (typeof timestamp.toDate === 'function') {
-      return timestamp.toDate().getTime();
-    }
-    if (typeof timestamp.seconds === 'number') {
-      return timestamp.seconds * 1000;
-    }
-  }
-  return 0;
-};
-
-const getSpotCoordinates = (spot: Spot) => {
-  const coordinates: any = (spot as any).coordinates;
-  const latitude =
-    coordinates?.latitude ??
-    coordinates?._latitude ??
-    (spot as any).latitude ??
-    (spot as any).lat;
-  const longitude =
-    coordinates?.longitude ??
-    coordinates?._longitude ??
-    (spot as any).longitude ??
-    (spot as any).lng ??
-    (spot as any).lon;
-
-  if (typeof latitude !== 'number' || typeof longitude !== 'number') {
-    return null;
-  }
-
-  return {latitude, longitude};
-};
-
-const getVideoPreviewImage = (post: UnifiedPost): string | null => {
-  const thumbnail = post.thumbnailUrl?.trim();
-  if (thumbnail) {
-    return thumbnail;
-  }
-  if (post.images.length > 0 && post.images[0]) {
-    return post.images[0];
-  }
-  const videoUrl = post.videoUrl?.trim();
-  if (!videoUrl) {
-    return null;
-  }
-  if (videoUrl.includes('/playlist.m3u8')) {
-    return videoUrl.replace(/\/playlist\.m3u8(\?.*)?$/, '/thumbnail.jpg');
-  }
-  return null;
-};
-
-const getBunnyMp4FallbackUrls = (videoUrl: string) => {
-  const trimmedUrl = videoUrl.trim();
-  if (!/\/playlist\.m3u8(\?|$)/i.test(trimmedUrl)) {
-    return [trimmedUrl];
-  }
-
-  const mp4_720 = trimmedUrl.replace(/\/playlist\.m3u8(\?.*)?$/i, '/play_720p.mp4');
-  const mp4_480 = trimmedUrl.replace(/\/playlist\.m3u8(\?.*)?$/i, '/play_480p.mp4');
-  const mp4_360 = trimmedUrl.replace(/\/playlist\.m3u8(\?.*)?$/i, '/play_360p.mp4');
-
-  return Array.from(new Set([mp4_720, mp4_480, mp4_360, trimmedUrl]));
-};
-
-const calculateDistanceKm = (
-  from: {latitude: number; longitude: number},
-  to: {latitude: number; longitude: number},
-) => {
-  const toRad = (value: number) => (value * Math.PI) / 180;
-  const earthRadiusKm = 6371;
-  const dLat = toRad(to.latitude - from.latitude);
-  const dLon = toRad(to.longitude - from.longitude);
-  const lat1 = toRad(from.latitude);
-  const lat2 = toRad(to.latitude);
-
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.sin(dLon / 2) * Math.sin(dLon / 2) * Math.cos(lat1) * Math.cos(lat2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return earthRadiusKm * c;
-};
-
-const FeedAdCard = ({label}: {label: string}) => (
-  <View style={styles.adCard}>
-    <Text style={styles.adLabel}>{label}</Text>
-    <BannerAd
-      unitId={feedBannerAdUnitId}
-      size={BannerAdSize.FULL_BANNER}
-      requestOptions={{requestNonPersonalizedAdsOnly: true}}
-    />
-  </View>
-);
 
 export default function FeedScreen() {
-  const navigation = useNavigation<any>();
-  const route = useRoute<any>();
+  const navigation = useNavigation<MainTabScreenNavigationProp<'Feed'>>();
+  const route = useRoute<MainTabScreenProps<'Feed'>['route']>();
+  const isScreenFocused = useIsFocused();
   const {t} = useTranslation();
   const {user, loading: authLoading} = useAuthContext();
   const {areAdsDisabled} = useAds();
   const {region: mapRegion, setRegion: setMapRegion} = useMap();
 
   const mapRef = useRef<MapView | null>(null);
+  const feedListRef = useRef<FlatList<FeedRow> | null>(null);
   const routeRefreshHandledRef = useRef<number | null>(null);
   const routeRefreshRetryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const refreshRequestIdRef = useRef(0);
-  const hasLoadedOnceRef = useRef(false);
-  const spotsRef = useRef<Spot[]>([]);
-  const socialPostsRef = useRef<SocialPost[]>([]);
-  const profilesByUserIdRef = useRef<Record<string, UserProfile | null>>({});
+  const pendingFocusedPostIdRef = useRef<string | null>(null);
 
   const [activeLayer, setActiveLayer] = useState<ActiveLayer>('feed');
   const [feedTab, setFeedTab] = useState<FeedTab>('all');
-
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const [spots, setSpots] = useState<Spot[]>([]);
-  const [socialPosts, setSocialPosts] = useState<SocialPost[]>([]);
-  const [spotReviewsBySpotId, setSpotReviewsBySpotId] = useState<Record<string, Review[]>>({});
-  const [postCommentsByPostId, setPostCommentsByPostId] = useState<Record<string, PostComment[]>>({});
-  const [profilesByUserId, setProfilesByUserId] = useState<Record<string, UserProfile | null>>({});
-
-  const [likedByCurrentUser, setLikedByCurrentUser] = useState<Record<string, boolean>>({});
-  const [likeCountByPostId, setLikeCountByPostId] = useState<Record<string, number>>({});
 
   const [inlineCommentDrafts, setInlineCommentDrafts] = useState<Record<string, string>>({});
   const [savingCommentByPostId, setSavingCommentByPostId] = useState<Record<string, boolean>>({});
   const [savingRatingBySpotId, setSavingRatingBySpotId] = useState<Record<string, boolean>>({});
   const [savingLikeByPostId, setSavingLikeByPostId] = useState<Record<string, boolean>>({});
   const [playingVideoPostId, setPlayingVideoPostId] = useState<string | null>(null);
-  const [endedVideoByPostId, setEndedVideoByPostId] = useState<Record<string, boolean>>({});
+  const [videoPrefetchAnchorPostId, setVideoPrefetchAnchorPostId] = useState<string | null>(null);
+  const [viewableVideoPostIds, setViewableVideoPostIds] = useState<string[]>([]);
+  const [bufferingVideoByPostId, setBufferingVideoByPostId] = useState<Record<string, boolean>>({});
   const [videoSourceByPostId, setVideoSourceByPostId] = useState<
     Record<string, {url: string; fallbackUrls: string[]}>
   >({});
+  const [forceBunnyEmbedByPostId, setForceBunnyEmbedByPostId] = useState<Record<string, boolean>>(
+    {},
+  );
+  const [videoAspectRatioByPostId, setVideoAspectRatioByPostId] = useState<Record<string, number>>(
+    {},
+  );
 
   const [expandedTextByPostId, setExpandedTextByPostId] = useState<Record<string, boolean>>({});
   const [visibleRows, setVisibleRows] = useState(12);
   const [isPeekMode, setIsPeekMode] = useState(false);
 
-  const [currentLocation, setCurrentLocation] = useState<
-    {latitude: number; longitude: number} | null
-  >(null);
-
   const [highlightedSpotId, setHighlightedSpotId] = useState<string | null>(null);
   const [reportSubmittingForPostId, setReportSubmittingForPostId] = useState<
     Record<string, boolean>
   >({});
+  const [joiningEventByPostId, setJoiningEventByPostId] = useState<Record<string, boolean>>({});
   const [commentsModalPostId, setCommentsModalPostId] = useState<string | null>(null);
   const playingVideoPostIdRef = useRef<string | null>(null);
-  const endedVideoByPostIdRef = useRef<Record<string, boolean>>({});
+  const viewableVideoPostIdsRef = useRef<string[]>([]);
+  const prefetchedVideoPostIdsRef = useRef<Record<string, true>>({});
+  const warmingVideoPostIdsRef = useRef<Record<string, true>>({});
+  const probedVideoPreviewByPostIdRef = useRef<Record<string, boolean>>({});
+  const playbackSwitchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prefetchBatchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoExpandedSheetForMediaRef = useRef(false);
 
-  useEffect(() => {
-    spotsRef.current = spots;
-  }, [spots]);
+  const canRenderFeedContent = isScreenFocused && activeLayer === 'feed' && !isPeekMode;
+  const {
+    currentLocation,
+    error,
+    isPostVisible,
+    likeCountByPostId,
+    likedByCurrentUser,
+    loading,
+    postCommentsByPostId,
+    profilesByUserId,
+    refreshContent,
+    refreshing,
+    setLikeCountByPostId,
+    setLikedByCurrentUser,
+    setPostCommentsByPostId,
+    setSpotReviewsBySpotId,
+    socialPosts,
+    spotReviewsBySpotId,
+    spots,
+  } = useFeedContent({
+    authLoading,
+    userId: user?.uid,
+    loadErrorMessage: t('feed.errorLoad'),
+  });
 
-  useEffect(() => {
-    socialPostsRef.current = socialPosts;
-  }, [socialPosts]);
-
-  useEffect(() => {
-    profilesByUserIdRef.current = profilesByUserId;
-  }, [profilesByUserId]);
+  const setMeasuredVideoAspectRatio = useCallback(
+    (postId: string, widthValue: unknown, heightValue: unknown) => {
+      const nextRatio = getMeasuredVideoAspectRatio(widthValue, heightValue);
+      if (!nextRatio) {
+        return;
+      }
+      setVideoAspectRatioByPostId(previous => {
+        const existing = previous[postId];
+        if (existing && Math.abs(existing - nextRatio) < 0.02) {
+          return previous;
+        }
+        return {
+          ...previous,
+          [postId]: nextRatio,
+        };
+      });
+    },
+    [],
+  );
 
   useEffect(() => {
     playingVideoPostIdRef.current = playingVideoPostId;
   }, [playingVideoPostId]);
 
   useEffect(() => {
-    endedVideoByPostIdRef.current = endedVideoByPostId;
-  }, [endedVideoByPostId]);
+    viewableVideoPostIdsRef.current = viewableVideoPostIds;
+  }, [viewableVideoPostIds]);
+
+  const syncViewableVideoPostIds = useCallback((nextPostIds: string[]) => {
+    setViewableVideoPostIds(previous => {
+      if (previous.length === nextPostIds.length && previous.every((postId, index) => postId === nextPostIds[index])) {
+        return previous;
+      }
+      return nextPostIds;
+    });
+  }, []);
+
+  const syncVideoPrefetchAnchorPostId = useCallback((nextPostId: string | null) => {
+    setVideoPrefetchAnchorPostId(previous => (previous === nextPostId ? previous : nextPostId));
+  }, []);
+
+  const setVideoBufferingState = useCallback((postId: string, isBuffering: boolean) => {
+    setBufferingVideoByPostId(previous => {
+      const current = Boolean(previous[postId]);
+      if (current === isBuffering) {
+        return previous;
+      }
+      if (isBuffering) {
+        return {
+          ...previous,
+          [postId]: true,
+        };
+      }
+      if (!current) {
+        return previous;
+      }
+      const next = {...previous};
+      delete next[postId];
+      return next;
+    });
+  }, []);
+
+  const clearScheduledPlaybackSwitch = useCallback(() => {
+    if (playbackSwitchTimeoutRef.current) {
+      clearTimeout(playbackSwitchTimeoutRef.current);
+      playbackSwitchTimeoutRef.current = null;
+    }
+  }, []);
+
+  const clearPrefetchBatchTimeout = useCallback(() => {
+    if (prefetchBatchTimeoutRef.current) {
+      clearTimeout(prefetchBatchTimeoutRef.current);
+      prefetchBatchTimeoutRef.current = null;
+    }
+  }, []);
+
+  const schedulePlayingVideo = useCallback(
+    (nextPostId: string | null, delayMs = 0) => {
+      clearScheduledPlaybackSwitch();
+      const commit = () => {
+        if (playingVideoPostIdRef.current !== nextPostId) {
+          setPlayingVideoPostId(nextPostId);
+        }
+      };
+      if (delayMs <= 0) {
+        commit();
+        return;
+      }
+      playbackSwitchTimeoutRef.current = setTimeout(() => {
+        playbackSwitchTimeoutRef.current = null;
+        commit();
+      }, delayMs);
+    },
+    [clearScheduledPlaybackSwitch],
+  );
+
+  useEffect(() => () => {
+    clearScheduledPlaybackSwitch();
+  }, [clearScheduledPlaybackSwitch]);
+
+  useEffect(() => () => {
+    clearPrefetchBatchTimeout();
+  }, [clearPrefetchBatchTimeout]);
+
+  useEffect(() => {
+    if (!isScreenFocused) {
+      schedulePlayingVideo(null, 0);
+      setCommentsModalPostId(null);
+    }
+  }, [isScreenFocused, schedulePlayingVideo]);
 
   const sheetHeight = useRef(new Animated.Value(SHEET_MID_HEIGHT)).current;
   const sheetHeightValueRef = useRef(SHEET_MID_HEIGHT);
@@ -308,12 +328,12 @@ export default function FeedScreen() {
     };
   }, [sheetHeight]);
 
-  const getHeartScale = (postId: string) => {
+  const getHeartScale = useCallback((postId: string) => {
     if (!heartScalesRef.current[postId]) {
       heartScalesRef.current[postId] = new Animated.Value(1);
     }
     return heartScalesRef.current[postId];
-  };
+  }, []);
 
   const animateSheetTo = useCallback((targetHeight: number) => {
     Animated.spring(sheetHeight, {
@@ -325,10 +345,10 @@ export default function FeedScreen() {
     }).start();
   }, [sheetHeight]);
 
-  const switchToFeedLayer = () => {
+  const switchToFeedLayer = useCallback(() => {
     setActiveLayer('feed');
     animateSheetTo(SHEET_MID_HEIGHT);
-  };
+  }, [animateSheetTo]);
 
   const switchToMapTab = useCallback(() => {
     requestAnimationFrame(() => {
@@ -336,10 +356,10 @@ export default function FeedScreen() {
     });
   }, [navigation]);
 
-  const switchToMapLayer = () => {
+  const switchToMapLayer = useCallback(() => {
     setActiveLayer('map');
     animateSheetTo(SHEET_MIN_HEIGHT);
-  };
+  }, [animateSheetTo]);
 
   const panResponder = useMemo(
     () =>
@@ -374,334 +394,6 @@ export default function FeedScreen() {
     [animateSheetTo, sheetHeight, switchToMapTab],
   );
 
-  const ensureProfiles = useCallback(
-    async (userIds: string[]) => {
-      const uniqueUserIds = Array.from(new Set(userIds.filter(Boolean)));
-      const missing = uniqueUserIds.filter(
-        userId => !(userId in profilesByUserIdRef.current),
-      );
-      if (!missing.length) {
-        return;
-      }
-
-      const entries = await Promise.all(
-        missing.map(async userId => {
-          try {
-            const profile = await getUserProfile(userId);
-            return [userId, profile] as const;
-          } catch (profileError) {
-            console.warn('[Feed] profile fetch failed', profileError);
-            return [userId, null] as const;
-          }
-        }),
-      );
-
-      setProfilesByUserId(prev => ({
-        ...prev,
-        ...Object.fromEntries(entries),
-      }));
-    },
-    [],
-  );
-
-  const fetchLocation = useCallback(async () => {
-    const hasPermission = await requestLocationPermission();
-    if (!hasPermission) {
-      return;
-    }
-    Geolocation.getCurrentPosition(
-      position => {
-        const coords = {
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-        };
-        setCurrentLocation(coords);
-        if (!mapRegion) {
-          const nextRegion: Region = {
-            ...coords,
-            latitudeDelta: 0.09,
-            longitudeDelta: 0.05,
-          };
-          setMapRegion(nextRegion);
-        }
-      },
-      geolocationError => {
-        console.warn('[Feed] location error', geolocationError);
-      },
-      {enableHighAccuracy: false, timeout: 15000, maximumAge: 10000},
-    );
-  }, [mapRegion, setMapRegion]);
-
-  const refreshContent = useCallback(
-    async (isPullRefresh = false) => {
-      const requestId = ++refreshRequestIdRef.current;
-      const mode = isPullRefresh ? 'pull' : 'initial';
-      console.log('[Feed][Load] start', {requestId, mode});
-
-      if (isPullRefresh) {
-        setRefreshing(true);
-      } else {
-        setLoading(true);
-      }
-      setError(null);
-
-      try {
-        const shouldLoadSocial = Boolean(user?.uid) && !authLoading;
-        if (!shouldLoadSocial) {
-          console.log('[Feed][Load] social content deferred until auth is ready', {
-            requestId,
-            authLoading,
-            hasUser: Boolean(user?.uid),
-          });
-        }
-
-        const [spotsResult, postsResult] = await Promise.allSettled([
-          withTimeout(getSpots(), FEED_PRIMARY_TIMEOUT_MS, 'spots'),
-          shouldLoadSocial
-            ? withTimeout(getSocialPosts(), FEED_PRIMARY_TIMEOUT_MS, 'posts')
-            : Promise.resolve<SocialPost[]>([]),
-        ]);
-
-        if (requestId !== refreshRequestIdRef.current) {
-          return;
-        }
-
-        const spotsOk = spotsResult.status === 'fulfilled';
-        const postsOk = postsResult.status === 'fulfilled';
-
-        if (!spotsOk) {
-          console.warn('[Feed][Load] spots failed', spotsResult.reason);
-        }
-        if (!postsOk) {
-          console.warn('[Feed][Load] posts failed', postsResult.reason);
-        }
-
-        const validSpots = spotsOk
-          ? spotsResult.value.filter(spot => Boolean(spot.id))
-          : spotsRef.current;
-        const validPosts = postsOk
-          ? postsResult.value.filter(post => Boolean(post.id))
-          : socialPostsRef.current;
-
-        setSpots(validSpots);
-        setSocialPosts(validPosts);
-        spotsRef.current = validSpots;
-        socialPostsRef.current = validPosts;
-
-        console.log('[Feed][Load] primary', {
-          requestId,
-          spotsOk,
-          postsOk,
-          spotCount: validSpots.length,
-          postCount: validPosts.length,
-        });
-
-        const hasAnyPrimaryData = validSpots.length > 0 || validPosts.length > 0;
-        if (!hasAnyPrimaryData) {
-          setSpotReviewsBySpotId({});
-          setPostCommentsByPostId({});
-          setLikeCountByPostId({});
-          setLikedByCurrentUser({});
-          if (!spotsOk || !postsOk) {
-            setError(t('feed.errorLoad'));
-          }
-          console.warn('[Feed][Load] no primary data available', {requestId});
-          return;
-        }
-
-        if (!isPullRefresh) {
-          // Keep skeleton only for primary payload. Secondary enrichment can load in background.
-          setLoading(false);
-        }
-
-        const spotReviewsEntries = await Promise.allSettled(
-          validSpots.map(async spot => {
-            const reviews = await withTimeout(
-              getReviewsForSpot(spot.id!),
-              FEED_SECONDARY_TIMEOUT_MS,
-              `reviews:${spot.id}`,
-            );
-            return [spot.id!, reviews] as const;
-          }),
-        );
-
-        if (requestId !== refreshRequestIdRef.current) {
-          return;
-        }
-
-        const spotReviewsMap: Record<string, Review[]> = {};
-        let spotReviewFailures = 0;
-        spotReviewsEntries.forEach(entry => {
-          if (entry.status === 'fulfilled') {
-            spotReviewsMap[entry.value[0]] = entry.value[1];
-          } else {
-            spotReviewFailures += 1;
-          }
-        });
-        if (spotReviewFailures > 0) {
-          console.warn('[Feed][Load] spot reviews partial failure', {
-            requestId,
-            failures: spotReviewFailures,
-          });
-        }
-        setSpotReviewsBySpotId(spotReviewsMap);
-
-        const dronePosts = validPosts.filter(post => post.type === 'drone');
-        const droneCommentEntries = await Promise.allSettled(
-          dronePosts.map(async post => {
-            const comments = await withTimeout(
-              getPostComments(post.id!),
-              FEED_SECONDARY_TIMEOUT_MS,
-              `postComments:${post.id}`,
-            );
-            return [post.id!, comments] as const;
-          }),
-        );
-
-        if (requestId !== refreshRequestIdRef.current) {
-          return;
-        }
-
-        const postCommentsMap: Record<string, PostComment[]> = {};
-        let postCommentFailures = 0;
-        droneCommentEntries.forEach(entry => {
-          if (entry.status === 'fulfilled') {
-            postCommentsMap[entry.value[0]] = entry.value[1];
-          } else {
-            postCommentFailures += 1;
-          }
-        });
-        if (postCommentFailures > 0) {
-          console.warn('[Feed][Load] post comments partial failure', {
-            requestId,
-            failures: postCommentFailures,
-          });
-        }
-        setPostCommentsByPostId(postCommentsMap);
-
-        const userIds = [
-          ...validSpots.map(spot => spot.createdBy),
-          ...validPosts.map(post => post.createdBy),
-          ...Object.values(spotReviewsMap)
-            .flat()
-            .map(review => review.userId),
-          ...Object.values(postCommentsMap)
-            .flat()
-            .map(comment => comment.userId),
-        ];
-        await ensureProfiles(userIds);
-
-        if (shouldLoadSocial) {
-          const spotPostIdBySpotId = new Map<string, string>();
-          validPosts.forEach(post => {
-            if (post.type === 'spot' && post.spotId && post.id) {
-              spotPostIdBySpotId.set(post.spotId, post.id);
-            }
-          });
-
-          const likeAliasesByPostId: Record<string, string[]> = {};
-          dronePosts.forEach(post => {
-            if (!post.id) {
-              return;
-            }
-            likeAliasesByPostId[post.id] = [post.id];
-          });
-          validSpots.forEach(spot => {
-            if (!spot.id) {
-              return;
-            }
-            const syntheticSpotPostId = getSpotPostDocId(spot.id);
-            const linkedSpotPostId = spotPostIdBySpotId.get(spot.id);
-            const unifiedSpotPostId = linkedSpotPostId ?? syntheticSpotPostId;
-            likeAliasesByPostId[unifiedSpotPostId] = Array.from(
-              new Set(
-                [unifiedSpotPostId, linkedSpotPostId, syntheticSpotPostId].filter(
-                  (value): value is string => Boolean(value),
-                ),
-              ),
-            );
-          });
-
-          const postIdsForLikes = Array.from(
-            new Set(Object.values(likeAliasesByPostId).flat()),
-          );
-          try {
-            const likeSummary = await withTimeout(
-              getLikesForPosts(postIdsForLikes),
-              FEED_SECONDARY_TIMEOUT_MS,
-              'likes',
-            );
-            if (requestId !== refreshRequestIdRef.current) {
-              return;
-            }
-            const mergedCountsByPostId: Record<string, number> = {};
-            const mergedLikedByCurrentUser: Record<string, boolean> = {};
-
-            Object.entries(likeAliasesByPostId).forEach(([postId, aliases]) => {
-              mergedCountsByPostId[postId] = aliases.reduce(
-                (sum, aliasPostId) => sum + (likeSummary.countsByPostId[aliasPostId] ?? 0),
-                0,
-              );
-              mergedLikedByCurrentUser[postId] = aliases.some(
-                aliasPostId => Boolean(likeSummary.likedByCurrentUser[aliasPostId]),
-              );
-            });
-
-            setLikeCountByPostId(mergedCountsByPostId);
-            setLikedByCurrentUser(mergedLikedByCurrentUser);
-          } catch (likeError) {
-            console.warn('[Feed][Load] likes failed', likeError);
-            if (requestId !== refreshRequestIdRef.current) {
-              return;
-            }
-            setLikeCountByPostId({});
-            setLikedByCurrentUser({});
-          }
-        } else {
-          setLikeCountByPostId({});
-          setLikedByCurrentUser({});
-        }
-
-        console.log('[Feed][Merge] hydrated', {
-          requestId,
-          mergedApprox: validSpots.length + dronePosts.length,
-          spotReviewCount: Object.keys(spotReviewsMap).length,
-          postCommentCount: Object.keys(postCommentsMap).length,
-        });
-      } catch (loadError) {
-        console.error('[Feed] refresh failed', loadError);
-        setError(t('feed.errorLoad'));
-      } finally {
-        if (requestId === refreshRequestIdRef.current) {
-          hasLoadedOnceRef.current = true;
-          setLoading(false);
-          setRefreshing(false);
-        }
-      }
-    },
-    [authLoading, ensureProfiles, t, user?.uid],
-  );
-
-  useEffect(() => {
-    refreshContent();
-    fetchLocation();
-  }, [fetchLocation, refreshContent]);
-
-  useEffect(() => {
-    if (authLoading || !hasLoadedOnceRef.current) {
-      return;
-    }
-    refreshContent(true);
-  }, [authLoading, refreshContent, user?.uid]);
-
-  useFocusEffect(
-    useCallback(() => {
-      if (hasLoadedOnceRef.current) {
-        refreshContent(true);
-      }
-    }, [refreshContent]),
-  );
-
   useEffect(() => {
     const refreshAt = route?.params?.refreshAt;
     if (typeof refreshAt !== 'number') {
@@ -718,23 +410,24 @@ export default function FeedScreen() {
     let cancelled = false;
 
     const run = async () => {
-      console.log('[Feed][Load] route refresh requested', {refreshAt, createdPostId});
+      logger.log('[Feed][Load] route refresh requested', {refreshAt, createdPostId});
       setFeedTab('all');
+      setActiveLayer('feed');
+      setIsPeekMode(false);
+      animateSheetTo(SHEET_MID_HEIGHT);
       setVisibleRows(12);
       await refreshContent(true);
       if (cancelled || !createdPostId) {
         return;
       }
 
-      const isCreatedPostVisible = socialPostsRef.current.some(
-        post => post.id === createdPostId,
-      );
+      const isCreatedPostVisible = isPostVisible(createdPostId);
       if (isCreatedPostVisible) {
-        console.log('[Feed][Load] created post visible', {createdPostId});
+        logger.log('[Feed][Load] created post visible', {createdPostId});
         return;
       }
 
-      console.warn('[Feed][Load] created post not visible yet, retrying', {
+      logger.warn('[Feed][Load] created post not visible yet, retrying', {
         createdPostId,
       });
       if (routeRefreshRetryTimeoutRef.current) {
@@ -754,7 +447,22 @@ export default function FeedScreen() {
         routeRefreshRetryTimeoutRef.current = null;
       }
     };
-  }, [refreshContent, route?.params?.createdPostId, route?.params?.refreshAt]);
+  }, [animateSheetTo, isPostVisible, refreshContent, route?.params?.createdPostId, route?.params?.refreshAt]);
+
+  useEffect(() => {
+    const postIdFromLink =
+      typeof route?.params?.postId === 'string' ? route.params.postId.trim() : null;
+    if (!postIdFromLink) {
+      return;
+    }
+    pendingFocusedPostIdRef.current = postIdFromLink;
+    setFeedTab('all');
+    setActiveLayer('feed');
+    setIsPeekMode(false);
+    animateSheetTo(SHEET_MID_HEIGHT);
+    setVisibleRows(prev => Math.max(prev, 22));
+    refreshContent(true);
+  }, [animateSheetTo, refreshContent, route?.params?.activityAt, route?.params?.postId]);
 
   const unifiedPosts = useMemo<UnifiedPost[]>(() => {
     const spotPostsBySpotId = new Map<string, SocialPost>();
@@ -810,8 +518,55 @@ export default function FeedScreen() {
         featured: Boolean(post.featured),
       }));
 
-    return [...spotUnified, ...droneUnified];
+    const eventUnified = socialPosts
+      .filter(post => post.type === 'event')
+      .map(post => ({
+        id: post.id!,
+        type: 'event' as const,
+        createdAtMs:
+          getTimestampMillis(post.createdAt) ||
+          (typeof (post as any).createdAtMs === 'number' ? (post as any).createdAtMs : 0),
+        createdBy: post.createdBy,
+        text: (post.text ?? '').trim(),
+        images: post.media?.images?.filter(Boolean) ?? [],
+        videoUrl: post.media?.videoUrl,
+        thumbnailUrl: post.media?.thumbnailUrl,
+        eventId: post.eventId,
+        eventMeta: post.eventMeta,
+        sourcePost: post,
+        featured: Boolean(post.featured),
+      }));
+
+    return [...spotUnified, ...droneUnified, ...eventUnified];
   }, [socialPosts, spots]);
+
+  const videoProbeCandidates = useMemo(() => {
+    const candidateCount = Math.max(visibleRows + FEED_VIDEO_PROBE_AHEAD, FEED_VIDEO_MIN_PREFETCH_ROWS);
+    return unifiedPosts.slice(0, candidateCount);
+  }, [unifiedPosts, visibleRows]);
+
+  useEffect(() => {
+    videoProbeCandidates.forEach(post => {
+      if ((!post.videoUrl && !post.images[0]) || videoAspectRatioByPostId[post.id]) {
+        return;
+      }
+      if (probedVideoPreviewByPostIdRef.current[post.id]) {
+        return;
+      }
+      probedVideoPreviewByPostIdRef.current[post.id] = true;
+      const previewUri = post.videoUrl ? getVideoPreviewImage(post) : post.images[0] ?? null;
+      if (!previewUri) {
+        return;
+      }
+      Image.getSize(
+        previewUri,
+        (width, height) => {
+          setMeasuredVideoAspectRatio(post.id, width, height);
+        },
+        () => {},
+      );
+    });
+  }, [setMeasuredVideoAspectRatio, videoAspectRatioByPostId, videoProbeCandidates]);
 
   const postMetrics = useMemo(() => {
     const now = Date.now();
@@ -899,6 +654,15 @@ export default function FeedScreen() {
     return items;
   }, [feedTab, postMetrics]);
 
+  const filteredPostIndexById = useMemo(
+    () =>
+      filteredPosts.reduce<Record<string, number>>((accumulator, item, index) => {
+        accumulator[item.post.id] = index;
+        return accumulator;
+      }, {}),
+    [filteredPosts],
+  );
+
   const feedRows = useMemo<FeedRow[]>(() => {
     const rows: FeedRow[] = [];
     filteredPosts.forEach((item, index) => {
@@ -910,21 +674,117 @@ export default function FeedScreen() {
     return rows;
   }, [areAdsDisabled, filteredPosts]);
 
+  const feedRowIndexByPostId = useMemo(
+    () =>
+      feedRows.reduce<Record<string, number>>((accumulator, row, index) => {
+        if (row.kind === 'post') {
+          accumulator[row.post.id] = index;
+        }
+        return accumulator;
+      }, {}),
+    [feedRows],
+  );
+
+  useEffect(() => {
+    const validPostIds = new Set(unifiedPosts.map(post => post.id));
+    Object.keys(prefetchedVideoPostIdsRef.current).forEach(postId => {
+      if (!validPostIds.has(postId)) {
+        delete prefetchedVideoPostIdsRef.current[postId];
+      }
+    });
+    Object.keys(warmingVideoPostIdsRef.current).forEach(postId => {
+      if (!validPostIds.has(postId)) {
+        delete warmingVideoPostIdsRef.current[postId];
+      }
+    });
+  }, [unifiedPosts]);
+
+  const postMetricsByPostId = useMemo(
+    () =>
+      postMetrics.reduce<Record<string, (typeof postMetrics)[number]>>((accumulator, metric) => {
+        accumulator[metric.post.id] = metric;
+        return accumulator;
+      }, {}),
+    [postMetrics],
+  );
+
   const commentsModalMetric = useMemo(
-    () => postMetrics.find(item => item.post.id === commentsModalPostId) ?? null,
-    [commentsModalPostId, postMetrics],
+    () => (commentsModalPostId ? postMetricsByPostId[commentsModalPostId] ?? null : null),
+    [commentsModalPostId, postMetricsByPostId],
   );
 
   const visibleRowsData = useMemo(
     () => feedRows.slice(0, visibleRows),
     [feedRows, visibleRows],
   );
+  const viewableVideoPostIdSet = useMemo(() => new Set(viewableVideoPostIds), [viewableVideoPostIds]);
+  const activeFeedPost = useMemo(
+    () => (videoPrefetchAnchorPostId ? postMetricsByPostId[videoPrefetchAnchorPostId]?.post ?? null : null),
+    [postMetricsByPostId, videoPrefetchAnchorPostId],
+  );
+  const activeFeedPostHasPortraitMedia = useMemo(() => {
+    if (!activeFeedPost || (!activeFeedPost.videoUrl && !activeFeedPost.images[0])) {
+      return false;
+    }
+    const aspectRatio = videoAspectRatioByPostId[activeFeedPost.id];
+    return typeof aspectRatio === 'number' && Number.isFinite(aspectRatio) && aspectRatio < 1;
+  }, [activeFeedPost, videoAspectRatioByPostId]);
+
+  useEffect(() => {
+    if (!canRenderFeedContent) {
+      autoExpandedSheetForMediaRef.current = false;
+      return;
+    }
+
+    if (activeFeedPostHasPortraitMedia) {
+      if (sheetHeightValueRef.current < SHEET_MAX_HEIGHT - 12) {
+        autoExpandedSheetForMediaRef.current = true;
+        animateSheetTo(SHEET_MAX_HEIGHT);
+      }
+      return;
+    }
+
+    if (autoExpandedSheetForMediaRef.current) {
+      autoExpandedSheetForMediaRef.current = false;
+      animateSheetTo(SHEET_MID_HEIGHT);
+    }
+  }, [
+    activeFeedPostHasPortraitMedia,
+    animateSheetTo,
+    canRenderFeedContent,
+  ]);
+
+  useEffect(() => {
+    const targetPostId = pendingFocusedPostIdRef.current;
+    if (!targetPostId || loading) {
+      return;
+    }
+
+    const targetRowIndex = feedRowIndexByPostId[targetPostId];
+    if (typeof targetRowIndex !== 'number') {
+      if (!refreshing) {
+        logger.warn('[Feed][Load] target post not found in feed', {postId: targetPostId});
+        pendingFocusedPostIdRef.current = null;
+      }
+      return;
+    }
+
+    setVisibleRows(previous => Math.max(previous, targetRowIndex + FEED_POST_PREFETCH_WINDOW));
+    requestAnimationFrame(() => {
+      feedListRef.current?.scrollToIndex({
+        index: targetRowIndex,
+        animated: true,
+        viewPosition: 0.06,
+      });
+    });
+    pendingFocusedPostIdRef.current = null;
+  }, [feedRowIndexByPostId, loading, refreshing]);
 
   useEffect(() => {
     if (loading) {
       return;
     }
-    console.log('[Feed][Merge] render', {
+    logger.log('[Feed][Merge] render', {
       tab: feedTab,
       unifiedCount: unifiedPosts.length,
       rowCount: feedRows.length,
@@ -947,7 +807,7 @@ export default function FeedScreen() {
     setMapRegion(nextRegion);
   };
 
-  const focusSpotOnMap = (spot: Spot) => {
+  const focusSpotOnMap = useCallback((spot: Spot) => {
     const coords = getSpotCoordinates(spot);
     if (!coords) {
       return;
@@ -963,15 +823,18 @@ export default function FeedScreen() {
     setMapRegion(targetRegion);
     mapRef.current?.animateToRegion(targetRegion, 700);
     switchToMapLayer();
-  };
+  }, [setMapRegion, switchToMapLayer]);
 
-  const onToggleLike = async (post: UnifiedPost) => {
+  const onToggleLike = useCallback(async (post: UnifiedPost) => {
     if (authLoading || !user) {
       Alert.alert(t('alerts.error'), t('alerts.mustBeLoggedIn'));
       return;
     }
 
     const postId = post.id;
+    if (savingLikeByPostId[postId]) {
+      return;
+    }
     const nextLiked = !likedByCurrentUser[postId];
     setSavingLikeByPostId(prev => ({...prev, [postId]: true}));
 
@@ -1000,7 +863,7 @@ export default function FeedScreen() {
         postType: post.type,
       });
     } catch (likeError) {
-      console.error('[Feed] like toggle failed', likeError);
+      logger.error('[Feed] like toggle failed', likeError);
       setLikedByCurrentUser(prev => ({
         ...prev,
         [postId]: !nextLiked,
@@ -1013,9 +876,18 @@ export default function FeedScreen() {
     } finally {
       setSavingLikeByPostId(prev => ({...prev, [postId]: false}));
     }
-  };
+  }, [
+    authLoading,
+    getHeartScale,
+    likedByCurrentUser,
+    savingLikeByPostId,
+    setLikeCountByPostId,
+    setLikedByCurrentUser,
+    t,
+    user,
+  ]);
 
-  const onRateSpot = async (spotId: string, rating: number) => {
+  const onRateSpot = useCallback(async (spotId: string, rating: number) => {
     if (!user || !spotId || !rating) {
       return;
     }
@@ -1032,14 +904,14 @@ export default function FeedScreen() {
       setSpotReviewsBySpotId(prev => ({...prev, [spotId]: latest}));
       refreshContent(true);
     } catch (ratingError) {
-      console.error('[Feed] spot rating failed', ratingError);
+      logger.error('[Feed] spot rating failed', ratingError);
       Alert.alert(t('alerts.error'), t('alerts.addReviewError'));
     } finally {
       setSavingRatingBySpotId(prev => ({...prev, [spotId]: false}));
     }
-  };
+  }, [refreshContent, setSpotReviewsBySpotId, t, user]);
 
-  const onSendComment = async (post: UnifiedPost) => {
+  const onSendComment = useCallback(async (post: UnifiedPost) => {
     if (!user) {
       Alert.alert(t('alerts.error'), t('alerts.mustBeLoggedIn'));
       return;
@@ -1079,15 +951,54 @@ export default function FeedScreen() {
       }
       refreshContent(true);
     } catch (commentError) {
-      console.error('[Feed] comment publish failed', commentError);
+      logger.error('[Feed] comment publish failed', commentError);
       Alert.alert(t('alerts.error'), t('alerts.addReviewError'));
       setInlineCommentDrafts(prev => ({...prev, [post.id]: draft}));
     } finally {
       setSavingCommentByPostId(prev => ({...prev, [post.id]: false}));
     }
-  };
+  }, [
+    inlineCommentDrafts,
+    refreshContent,
+    setPostCommentsByPostId,
+    setSpotReviewsBySpotId,
+    t,
+    user,
+  ]);
 
-  const onReportPost = (post: UnifiedPost) => {
+  const onSharePost = useCallback(async (post: UnifiedPost) => {
+    const spotName = post.spot?.name?.trim() || t('feed.untitled');
+    const isSpotPost = post.type === 'spot';
+    const isEventPost = post.type === 'event';
+    const shareUrl =
+      isSpotPost && post.spot?.id
+        ? buildSpotShareUrl(post.spot.id)
+        : isEventPost && post.eventId
+          ? buildEventShareUrl(post.eventId)
+        : buildPostShareUrl(post.id);
+    const shareMessageBase = isSpotPost
+      ? t('feed.shareMessageSpot', {spotName})
+      : isEventPost
+        ? t('feed.shareMessageEvent', {
+            eventName: post.eventMeta?.title || t('feed.badgeEvent'),
+          })
+      : t('feed.shareMessagePost');
+    const sharePayload = shareUrl
+      ? {
+          message: `${shareMessageBase}\n${shareUrl}\n${PLAY_STORE_URL}`,
+          url: shareUrl,
+        }
+      : {message: `${shareMessageBase}\n${PLAY_STORE_URL}`};
+
+    try {
+      await Share.share(sharePayload);
+    } catch (shareError) {
+      logger.warn('[Feed] share post failed', {postId: post.id, error: shareError});
+      Alert.alert(t('alerts.error'), t('feed.shareError'));
+    }
+  }, [t]);
+
+  const onReportPost = useCallback((post: UnifiedPost) => {
     Alert.alert(
       t('feed.reportTitle'),
       t('feed.reportPrompt'),
@@ -1110,7 +1021,7 @@ export default function FeedScreen() {
               });
               Alert.alert(t('alerts.success'), t('feed.reportSent'));
             } catch (reportError) {
-              console.error('[Feed] report failed', reportError);
+              logger.error('[Feed] report failed', reportError);
               Alert.alert(t('alerts.error'), t('feed.reportError'));
             } finally {
               setReportSubmittingForPostId(prev => ({...prev, [post.id]: false}));
@@ -1131,7 +1042,7 @@ export default function FeedScreen() {
               });
               Alert.alert(t('alerts.success'), t('feed.reportSent'));
             } catch (reportError) {
-              console.error('[Feed] report failed', reportError);
+              logger.error('[Feed] report failed', reportError);
               Alert.alert(t('alerts.error'), t('feed.reportError'));
             } finally {
               setReportSubmittingForPostId(prev => ({...prev, [post.id]: false}));
@@ -1140,415 +1051,581 @@ export default function FeedScreen() {
         },
       ],
     );
-  };
+  }, [t]);
 
-  const goToSpotDetail = (spotId?: string) => {
+  const goToSpotDetail = useCallback((spotId?: string) => {
     if (!spotId) {
       return;
     }
     navigation.navigate('SpotDetail', {spotId});
-  };
+  }, [navigation]);
 
-  const getInlineVideoSource = (post: UnifiedPost) => {
+  const goToEventDetail = useCallback((eventId?: string) => {
+    if (!eventId) {
+      return;
+    }
+    navigation.navigate('EventDetail', {eventId});
+  }, [navigation]);
+
+  const openEventDirections = useCallback(
+    async (post: UnifiedPost) => {
+      const directionsUrl = buildGoogleMapsDirectionsUrl({
+        latitude: post.eventMeta?.latitude,
+        longitude: post.eventMeta?.longitude,
+        address: post.eventMeta?.locationAddress,
+        label: post.eventMeta?.locationLabel,
+      });
+
+      if (!directionsUrl) {
+        Alert.alert(t('alerts.error'), t('alerts.cannotOpenLink'));
+        return;
+      }
+
+      try {
+        await Linking.openURL(directionsUrl);
+      } catch (directionsError) {
+        logger.warn('[Feed] event directions failed', {postId: post.id, error: directionsError});
+        Alert.alert(t('alerts.error'), t('alerts.cannotOpenLink'));
+      }
+    },
+    [t],
+  );
+
+  const viewEventOnMap = useCallback(
+    (post: UnifiedPost) => {
+      navigation.navigate('Map', {
+        focusEventId: post.eventId ?? null,
+        focusLatitude:
+          typeof post.eventMeta?.latitude === 'number' ? post.eventMeta.latitude : null,
+        focusLongitude:
+          typeof post.eventMeta?.longitude === 'number' ? post.eventMeta.longitude : null,
+        focusRequestedAt: Date.now(),
+      });
+    },
+    [navigation],
+  );
+
+  const onJoinEventFromPost = useCallback(
+    async (post: UnifiedPost) => {
+      if (!user) {
+        Alert.alert(t('alerts.error'), t('alerts.mustBeLoggedIn'));
+        return;
+      }
+      if (!post.eventId || !post.eventMeta?.isPublic) {
+        return;
+      }
+
+      setJoiningEventByPostId(previous => ({...previous, [post.id]: true}));
+      try {
+        const result = await joinPublicEvent(post.eventId);
+        if (result.participantStatus === 'going') {
+          Alert.alert(t('alerts.success'), t('events.joinedSuccess'));
+        } else if (result.participantStatus === 'requested') {
+          Alert.alert(t('alerts.success'), t('events.requestSentSuccess'));
+        } else {
+          Alert.alert(t('alerts.attention'), t('events.alreadyInvitedHint'));
+        }
+      } catch (joinError) {
+        logger.error('[Feed] join event from post failed', {postId: post.id, error: joinError});
+        if (
+          joinError instanceof Error &&
+          joinError.message === 'event_participation_managed_by_host'
+        ) {
+          Alert.alert(t('alerts.error'), t('events.managedByHostOnly'));
+        } else {
+          Alert.alert(t('alerts.error'), t('events.actionError'));
+        }
+      } finally {
+        setJoiningEventByPostId(previous => ({...previous, [post.id]: false}));
+      }
+    },
+    [t, user],
+  );
+
+  const getInlineVideoSource = useCallback((post: UnifiedPost) => {
     const existing = videoSourceByPostId[post.id];
     if (existing) {
       return existing;
     }
-    const urls = post.videoUrl ? getBunnyMp4FallbackUrls(post.videoUrl) : [];
+    const urls = post.videoUrl ? buildVideoSourceCandidates(post.videoUrl) : [];
     return {
       url: urls[0] ?? '',
       fallbackUrls: urls.slice(1),
     };
-  };
+  }, [videoSourceByPostId]);
 
-  const renderPostCard = (post: UnifiedPost) => {
-    const metric = postMetrics.find(item => item.post.id === post.id);
+  const onToggleExpandedText = useCallback((postId: string) => {
+    setExpandedTextByPostId(prev => ({
+      ...prev,
+      [postId]: !prev[postId],
+    }));
+  }, []);
+
+  const onTogglePostPlayback = useCallback((postId: string) => {
+    clearScheduledPlaybackSwitch();
+    setPlayingVideoPostId(prev => {
+      const next = prev === postId ? null : postId;
+      if (next === null) {
+        setVideoBufferingState(postId, false);
+      }
+      return next;
+    });
+  }, [clearScheduledPlaybackSwitch, setVideoBufferingState]);
+
+  const onChangeInlineComment = useCallback((postId: string, value: string) => {
+    setInlineCommentDrafts(prev => ({
+      ...prev,
+      [postId]: value,
+    }));
+  }, []);
+
+  const onOpenCommentsModal = useCallback((postId: string) => {
+    setCommentsModalPostId(postId);
+  }, []);
+
+  const onInlineVideoBufferingChange = useCallback((postId: string, isBuffering: boolean) => {
+    setVideoBufferingState(postId, isBuffering);
+  }, [setVideoBufferingState]);
+
+  const onInlineVideoMeasured = useCallback(
+    (postId: string, widthValue: unknown, heightValue: unknown) => {
+      setMeasuredVideoAspectRatio(postId, widthValue, heightValue);
+    },
+    [setMeasuredVideoAspectRatio],
+  );
+
+  const onSwitchPostToBunnyEmbed = useCallback((postId: string) => {
+    setForceBunnyEmbedByPostId(previous => {
+      if (previous[postId]) {
+        return previous;
+      }
+      return {
+        ...previous,
+        [postId]: true,
+      };
+    });
+  }, []);
+
+  const onAdvancePostVideoSource = useCallback(
+    (postId: string, nextSource: {url: string; fallbackUrls: string[]}) => {
+      setVideoSourceByPostId(previous => ({
+        ...previous,
+        [postId]: nextSource,
+      }));
+    },
+    [],
+  );
+
+  const onEnsurePostPlaying = useCallback((postId: string) => {
+    setPlayingVideoPostId(postId);
+  }, []);
+
+  const feedLabels = useMemo(
+    () => ({
+      badgeSpot: t('feed.badgeSpot'),
+      badgeDrone: t('feed.badgeDrone'),
+      badgeEvent: t('feed.badgeEvent'),
+      video: t('feed.video'),
+      noMedia: t('feed.noMedia'),
+      seeMore: t('feed.seeMore'),
+      seeLess: t('feed.seeLess'),
+      viewOnMap: t('feed.viewOnMap'),
+      directions: t('spotDetail.directionsButton'),
+      viewEvent: t('feed.viewEvent'),
+      share: t('feed.share'),
+      report: t('feed.report'),
+      yourRating: t('feed.yourRating'),
+      latestComments: t('feed.latestComments'),
+      noCommentsYet: t('feed.noCommentsYet'),
+      commentPlaceholder: t('feed.commentPlaceholder'),
+      viewAllComments: t('feed.viewAllComments'),
+      exploreSpot: t('feed.exploreSpot'),
+      errorTitle: t('alerts.error'),
+      videoPlaybackError: t('alerts.videoPlaybackError'),
+      unknownUser: t('common.unknownUser'),
+      eventStarts: t('feed.eventStarts'),
+      eventPublicClosed: t('events.publicJoinModeApprovalSummary'),
+      eventPublicOpen: t('events.publicJoinModeOpenSummary'),
+      eventPublic: t('feed.eventPublic'),
+      eventPrivate: t('feed.eventPrivate'),
+      requestJoinAction: t('events.requestJoinAction'),
+      joinOpenAction: t('events.joinOpenAction'),
+    }),
+    [t],
+  );
+
+  const warmupVideoForPost = useCallback(
+    async (post: UnifiedPost) => {
+      if (!post.videoUrl) {
+        return;
+      }
+      if (prefetchedVideoPostIdsRef.current[post.id] || warmingVideoPostIdsRef.current[post.id]) {
+        return;
+      }
+
+      warmingVideoPostIdsRef.current[post.id] = true;
+      const previewUri = getVideoPreviewImage(post);
+      if (previewUri) {
+        Image.prefetch(previewUri).catch(() => {});
+      }
+
+      const existing = videoSourceByPostId[post.id];
+      const sourceCandidates = existing
+        ? [existing.url, ...existing.fallbackUrls].filter(Boolean)
+        : buildVideoSourceCandidates(post.videoUrl);
+      const warmupUrl = pickWarmupVideoUrl(sourceCandidates);
+      if (!warmupUrl) {
+        prefetchedVideoPostIdsRef.current[post.id] = true;
+        delete warmingVideoPostIdsRef.current[post.id];
+        return;
+      }
+
+      const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timeoutHandle = setTimeout(() => {
+        abortController?.abort();
+      }, FEED_VIDEO_WARMUP_TIMEOUT_MS);
+
+      try {
+        const response = await fetch(warmupUrl, {
+          method: 'GET',
+          headers: {
+            Range: `bytes=0-${FEED_VIDEO_WARMUP_RANGE_LAST_BYTE}`,
+          },
+          signal: abortController?.signal,
+        });
+        if (response.ok || response.status === 206 || response.status === 416) {
+          prefetchedVideoPostIdsRef.current[post.id] = true;
+        }
+      } catch {
+        // Best effort warmup only.
+      } finally {
+        clearTimeout(timeoutHandle);
+        delete warmingVideoPostIdsRef.current[post.id];
+      }
+    },
+    [videoSourceByPostId],
+  );
+
+  const renderRow = useCallback(({item}: {item: FeedRow}) => {
+    if (item.kind === 'ad') {
+      return <FeedAdCard label={t('feed.adLabel')} />;
+    }
+    const post = item.post;
+    const metric = postMetricsByPostId[post.id];
     if (!metric) {
       return null;
     }
-
-    const commentsPreview = metric.comments.slice(0, 2);
-    const postAuthor = profilesByUserId[post.createdBy]?.displayName || t('common.unknownUser');
-    const postText = post.text;
-    const isExpanded = Boolean(expandedTextByPostId[post.id]);
-    const shouldCollapse = postText.length > 180;
-    const liked = Boolean(likedByCurrentUser[post.id]);
-    const videoPreviewUri = post.videoUrl ? getVideoPreviewImage(post) : null;
     const hasVideo = Boolean(post.videoUrl);
+    const videoPreviewUri = hasVideo ? getVideoPreviewImage(post) : null;
+    const bunnyEmbed = getBunnyEmbedForVideoUrl(post.videoUrl);
     const inlineVideoSource = hasVideo ? getInlineVideoSource(post) : null;
-    const isVideoPlaying = hasVideo && playingVideoPostId === post.id;
-    const hasVideoEnded = Boolean(endedVideoByPostId[post.id]);
-
+    const shouldUseBunnyEmbed = Boolean(forceBunnyEmbedByPostId[post.id] && bunnyEmbed);
+    const nativeVideoHeaders = bunnyEmbed
+      ? {
+          Referer: 'https://iframe.mediadelivery.net/',
+          Origin: 'https://iframe.mediadelivery.net',
+        }
+      : undefined;
+    const isVideoPlaying =
+      hasVideo &&
+      canRenderFeedContent &&
+      playingVideoPostId === post.id &&
+      viewableVideoPostIdSet.has(post.id);
+    const shouldExpandVideoFrame =
+      hasVideo && canRenderFeedContent && playingVideoPostId === post.id;
+    const isVideoBuffering = Boolean(bufferingVideoByPostId[post.id]);
+    const videoAspectRatio = hasVideo ? videoAspectRatioByPostId[post.id] : null;
+    const videoFrameHeight = hasVideo
+      ? shouldExpandVideoFrame
+        ? getFeedVideoPlaybackHeight(videoAspectRatio)
+        : getFeedVideoHeight(videoAspectRatio)
+      : FEED_MEDIA_MIN_HEIGHT;
+    const willRenderBunnyWebView = Boolean(
+      isVideoPlaying && shouldUseBunnyEmbed && bunnyEmbed,
+    );
     const userSpotRating =
       post.type === 'spot'
         ? metric.ratings.find(review => review.userId === user?.uid)?.rating ?? 0
         : 0;
 
     return (
-      <View style={styles.card}>
-        <View style={styles.cardHead}>
-          <View style={styles.cardHeadLeft}>
-            <Icon
-              name={post.type === 'spot' ? 'map-marker' : 'drone'}
-              size={16}
-              color={post.type === 'spot' ? '#0f766e' : '#0369a1'}
-            />
-            <Text style={styles.cardHeadType}>
-              {post.type === 'spot' ? t('feed.badgeSpot') : t('feed.badgeDrone')}
-            </Text>
-          </View>
-          <Text style={styles.cardHeadAuthor}>@{postAuthor}</Text>
-        </View>
+      <FeedPostCard
+        post={post}
+        metric={metric}
+        postAuthor={profilesByUserId[post.createdBy]?.displayName || feedLabels.unknownUser}
+        profilesByUserId={profilesByUserId}
+        labels={feedLabels}
+        isExpanded={Boolean(expandedTextByPostId[post.id])}
+        liked={Boolean(likedByCurrentUser[post.id])}
+        userSpotRating={userSpotRating}
+        commentDraft={inlineCommentDrafts[post.id] ?? ''}
+        savingLike={Boolean(savingLikeByPostId[post.id])}
+        savingComment={Boolean(savingCommentByPostId[post.id])}
+        savingRating={Boolean(savingRatingBySpotId[post.spot?.id ?? ''])}
+        reportSubmitting={Boolean(reportSubmittingForPostId[post.id])}
+        hasVideo={hasVideo}
+        videoPreviewUri={videoPreviewUri}
+        inlineVideoSource={inlineVideoSource}
+        nativeVideoHeaders={nativeVideoHeaders}
+        bunnyEmbed={bunnyEmbed}
+        shouldUseBunnyEmbed={shouldUseBunnyEmbed}
+        willRenderBunnyWebView={willRenderBunnyWebView}
+        isVideoPlaying={isVideoPlaying}
+        isVideoBuffering={isVideoBuffering}
+        videoFrameHeight={videoFrameHeight}
+        heartScale={getHeartScale(post.id)}
+        buildInlineBunnyIframeHtml={buildInlineBunnyIframeHtml}
+        onToggleText={onToggleExpandedText}
+        onTogglePlayback={onTogglePostPlayback}
+        onLike={onToggleLike}
+        onRateSpot={onRateSpot}
+        onChangeComment={onChangeInlineComment}
+        onSendComment={onSendComment}
+        onOpenComments={onOpenCommentsModal}
+        onShare={onSharePost}
+        onReport={onReportPost}
+        onFocusSpotOnMap={focusSpotOnMap}
+        onOpenEventDirections={openEventDirections}
+        onViewEventOnMap={viewEventOnMap}
+        onJoinEvent={onJoinEventFromPost}
+        onGoToSpotDetail={goToSpotDetail}
+        onGoToEventDetail={goToEventDetail}
+        onVideoBufferingChange={onInlineVideoBufferingChange}
+        onVideoMeasured={onInlineVideoMeasured}
+        onSwitchToBunnyEmbed={onSwitchPostToBunnyEmbed}
+        onAdvanceVideoSource={onAdvancePostVideoSource}
+        onEnsureVideoPlaying={onEnsurePostPlaying}
+        canJoinEvent={Boolean(user?.uid && post.createdBy !== user.uid && post.eventMeta?.isPublic)}
+        joiningEvent={Boolean(joiningEventByPostId[post.id])}
+      />
+    );
+  }, [
+    bufferingVideoByPostId,
+    canRenderFeedContent,
+    expandedTextByPostId,
+    feedLabels,
+    focusSpotOnMap,
+    forceBunnyEmbedByPostId,
+    getHeartScale,
+    getInlineVideoSource,
+    goToEventDetail,
+    goToSpotDetail,
+    inlineCommentDrafts,
+    joiningEventByPostId,
+    likedByCurrentUser,
+    openEventDirections,
+    onAdvancePostVideoSource,
+    onChangeInlineComment,
+    onEnsurePostPlaying,
+    onJoinEventFromPost,
+    onInlineVideoBufferingChange,
+    onInlineVideoMeasured,
+    onOpenCommentsModal,
+    onRateSpot,
+    onReportPost,
+    onSendComment,
+    onSharePost,
+    onSwitchPostToBunnyEmbed,
+    onToggleExpandedText,
+    onToggleLike,
+    onTogglePostPlayback,
+    playingVideoPostId,
+    postMetricsByPostId,
+    profilesByUserId,
+    reportSubmittingForPostId,
+    savingCommentByPostId,
+    savingLikeByPostId,
+    savingRatingBySpotId,
+    t,
+    user?.uid,
+    videoAspectRatioByPostId,
+    viewEventOnMap,
+    viewableVideoPostIdSet,
+  ]);
 
-        <View style={styles.mediaFrame}>
-          {hasVideo && inlineVideoSource?.url ? (
-            <Pressable
-              style={styles.videoPressable}
-              onPress={() => {
-                if (hasVideoEnded) {
-                  setEndedVideoByPostId(prev => ({...prev, [post.id]: false}));
-                  setPlayingVideoPostId(post.id);
-                  return;
-                }
-                setPlayingVideoPostId(prev => (prev === post.id ? null : post.id));
-              }}>
-              {isVideoPlaying ? (
-                <Video
-                  key={`${post.id}-${inlineVideoSource.url}`}
-                  source={{uri: inlineVideoSource.url}}
-                  style={styles.videoView}
-                  resizeMode="cover"
-                  paused={false}
-                  muted={false}
-                  repeat={false}
-                  controls={false}
-                  onEnd={() => {
-                    setEndedVideoByPostId(prev => ({...prev, [post.id]: true}));
-                    setPlayingVideoPostId(prev => (prev === post.id ? null : prev));
-                  }}
-                  onError={playbackError => {
-                    console.warn('[Feed] inline video playback failed', {
-                      postId: post.id,
-                      source: inlineVideoSource.url,
-                      error: playbackError,
-                    });
-                    setVideoSourceByPostId(previous => {
-                      const existing = previous[post.id] ?? inlineVideoSource;
-                      if (!existing.fallbackUrls.length) {
-                        Alert.alert(t('alerts.error'), t('alerts.videoPlaybackError'));
-                        return previous;
-                      }
-                      const [nextUrl, ...rest] = existing.fallbackUrls;
-                      return {
-                        ...previous,
-                        [post.id]: {
-                          url: nextUrl,
-                          fallbackUrls: rest,
-                        },
-                      };
-                    });
-                    setEndedVideoByPostId(prev => ({...prev, [post.id]: false}));
-                    setPlayingVideoPostId(post.id);
-                  }}
-                />
-              ) : videoPreviewUri ? (
-                <Image source={{uri: videoPreviewUri}} style={styles.imageView} />
-              ) : (
-                <View style={styles.mediaFallback}>
-                  <Icon name="video-off-outline" size={24} color={palette.textMuted} />
-                  <Text style={styles.mediaFallbackText}>{t('feed.video')}</Text>
-                </View>
-              )}
-              <View style={styles.videoPill}>
-                <Icon
-                  name={hasVideoEnded ? 'replay' : 'play-circle'}
-                  size={18}
-                  color="#fff"
-                />
-                <Text style={styles.videoPillText}>{t('feed.video')}</Text>
-              </View>
-              <View style={styles.videoTogglePill}>
-                <Icon
-                  name={isVideoPlaying ? 'pause-circle' : 'play-circle'}
-                  size={18}
-                  color="#fff"
-                />
-              </View>
-            </Pressable>
-          ) : post.images.length ? (
-            <Image source={{uri: post.images[0]}} style={styles.imageView} />
-          ) : (
-            <View style={styles.mediaFallback}>
-              <Icon name="image-off-outline" size={24} color={palette.textMuted} />
-              <Text style={styles.mediaFallbackText}>{t('feed.noMedia')}</Text>
-            </View>
-          )}
-        </View>
-
-        <View style={styles.cardContent}>
-          {postText ? (
-            <>
-              <Text
-                style={styles.postText}
-                numberOfLines={shouldCollapse && !isExpanded ? 3 : undefined}>
-                {postText}
-              </Text>
-              {shouldCollapse ? (
-                <TouchableOpacity
-                  onPress={() =>
-                    setExpandedTextByPostId(prev => ({
-                      ...prev,
-                      [post.id]: !prev[post.id],
-                    }))
-                  }>
-                  <Text style={styles.linkText}>
-                    {isExpanded ? t('feed.seeLess') : t('feed.seeMore')}
-                  </Text>
-                </TouchableOpacity>
-              ) : null}
-            </>
-          ) : null}
-
-          {post.type === 'spot' ? (
-            <View style={styles.spotMetaRow}>
-              <View style={styles.spotRatingSummary}>
-                <Icon name="star" size={14} color="#f59e0b" />
-                <Text style={styles.spotRatingText}>
-                  {Number(post.spot?.averageRating || 0).toFixed(1)}
-                  {' · '}
-                  {post.spot?.ratingCount ?? post.spot?.reviewCount ?? 0}
-                </Text>
-              </View>
-              <TouchableOpacity
-                style={styles.mapButton}
-                onPress={() => focusSpotOnMap(post.spot!)}>
-                <Icon name="map-marker-radius" size={15} color="#fff" />
-                <Text style={styles.mapButtonText}>{t('feed.viewOnMap')}</Text>
-              </TouchableOpacity>
-            </View>
-          ) : null}
-
-          <View style={styles.actionsRow}>
-            <Pressable onPress={() => onToggleLike(post)}>
-              <Animated.View
-                style={[
-                  styles.actionIconButton,
-                  {transform: [{scale: getHeartScale(post.id)}]},
-                ]}>
-                <Icon
-                  name={liked ? 'heart' : 'heart-outline'}
-                  size={20}
-                  color={liked ? '#ef4444' : palette.textSecondary}
-                />
-                <Text style={styles.actionLabel}>{metric.likesCount}</Text>
-                {savingLikeByPostId[post.id] ? (
-                  <ActivityIndicator size="small" color={palette.textMuted} />
-                ) : null}
-              </Animated.View>
-            </Pressable>
-
-            <View style={styles.actionIconButton}>
-              <Icon name="comment-outline" size={20} color={palette.textSecondary} />
-              <Text style={styles.actionLabel}>{metric.comments.length}</Text>
-            </View>
-
-            <TouchableOpacity style={styles.actionIconButton} onPress={() => onReportPost(post)}>
-              <Icon
-                name={reportSubmittingForPostId[post.id] ? 'progress-clock' : 'flag-outline'}
-                size={20}
-                color={palette.textSecondary}
-              />
-              <Text style={styles.actionLabel}>{t('feed.report')}</Text>
-            </TouchableOpacity>
-          </View>
-
-          {post.type === 'spot' ? (
-            <View style={styles.inlineRatingWrap}>
-              <Text style={styles.inlineSectionTitle}>{t('feed.yourRating')}</Text>
-              <View style={styles.inlineRatingRow}>
-                <Rating
-                  type="star"
-                  imageSize={22}
-                  ratingCount={5}
-                  startingValue={userSpotRating}
-                  onFinishRating={value => onRateSpot(post.spot!.id!, value)}
-                  readonly={Boolean(savingRatingBySpotId[post.spot!.id!])}
-                />
-                {savingRatingBySpotId[post.spot!.id!] ? (
-                  <ActivityIndicator size="small" color={palette.highlight} />
-                ) : null}
-              </View>
-            </View>
-          ) : null}
-
-          <View style={styles.commentsBlock}>
-            <Text style={styles.inlineSectionTitle}>{t('feed.latestComments')}</Text>
-            {commentsPreview.length ? (
-              commentsPreview.map(comment => {
-                const userId =
-                  (comment as Review).userId || (comment as PostComment).userId;
-                const author =
-                  profilesByUserId[userId]?.displayName || t('common.unknownUser');
-                const text =
-                  (comment as Review).text || (comment as PostComment).text || '';
-                return (
-                  <View
-                    key={(comment as Review).id || (comment as PostComment).id}
-                    style={styles.commentBubble}>
-                    <Text style={styles.commentAuthor}>{author}</Text>
-                    <Text style={styles.commentText}>{text}</Text>
-                  </View>
-                );
-              })
-            ) : (
-              <Text style={styles.commentEmpty}>{t('feed.noCommentsYet')}</Text>
-            )}
-
-            <View style={styles.commentInputRow}>
-              <TextInput
-                style={styles.commentInput}
-                placeholder={t('feed.commentPlaceholder')}
-                placeholderTextColor={palette.textMuted}
-                value={inlineCommentDrafts[post.id] ?? ''}
-                onChangeText={value =>
-                  setInlineCommentDrafts(prev => ({
-                    ...prev,
-                    [post.id]: value,
-                  }))
-                }
-              />
-              <TouchableOpacity
-                style={styles.sendButton}
-                onPress={() => onSendComment(post)}
-                disabled={Boolean(savingCommentByPostId[post.id])}>
-                {savingCommentByPostId[post.id] ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <Icon name="send" size={18} color="#fff" />
-                )}
-              </TouchableOpacity>
-            </View>
-
-            <TouchableOpacity onPress={() => setCommentsModalPostId(post.id)}>
-              <Text style={styles.linkText}>{t('feed.viewAllComments')}</Text>
-            </TouchableOpacity>
-
-            {post.type === 'spot' ? (
-              <View style={styles.spotActionFooter}>
-                <TouchableOpacity onPress={() => goToSpotDetail(post.spot?.id)}>
-                  <Text style={styles.linkText}>{t('feed.exploreSpot')}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => focusSpotOnMap(post.spot!)}>
-                  <Text style={styles.linkText}>{t('feed.viewOnMap')}</Text>
-                </TouchableOpacity>
-              </View>
-            ) : null}
-          </View>
-        </View>
+  const renderModalCommentRow = useCallback(({item: value}: {item: Review | PostComment}) => {
+    const author =
+      profilesByUserId[value.userId]?.displayName || t('common.unknownUser');
+    return (
+      <View style={styles.modalCommentRow}>
+        <Text style={styles.commentAuthor}>{author}</Text>
+        <Text style={styles.commentText}>{value.text ?? ''}</Text>
       </View>
     );
-  };
+  }, [profilesByUserId, t]);
 
-  const renderRow = ({item}: {item: FeedRow}) => {
-    if (item.kind === 'ad') {
-      return <FeedAdCard label={t('feed.adLabel')} />;
-    }
-    return renderPostCard(item.post);
-  };
+  const commentKeyExtractor = useCallback(
+    (value: Review | PostComment) =>
+      value.id ?? `${value.userId}-${getTimestampMillis(value.createdAt)}`,
+    [],
+  );
+
+  const mapMarkers = useMemo(
+    () =>
+      spots.map(spot => {
+        const coordinates = getSpotCoordinates(spot);
+        if (!coordinates) {
+          return null;
+        }
+        return (
+          <Marker
+            key={spot.id}
+            coordinate={coordinates}
+            pinColor={highlightedSpotId === spot.id ? '#ef4444' : '#007BFF'}
+            onPress={() => {
+              if (activeLayer === 'map') {
+                setHighlightedSpotId(spot.id ?? null);
+              }
+            }}
+          />
+        );
+      }),
+    [activeLayer, highlightedSpotId, spots],
+  );
 
   const viewabilityConfigRef = useRef({
-    itemVisiblePercentThreshold: 45,
+    itemVisiblePercentThreshold: 35,
+    minimumViewTime: 150,
   });
 
   const onViewableItemsChanged = useCallback(
     ({viewableItems}: {viewableItems: Array<ViewToken>}) => {
-      if (activeLayer !== 'feed' || isPeekMode) {
-        setPlayingVideoPostId(null);
+      if (!canRenderFeedContent) {
+        syncViewableVideoPostIds([]);
+        syncVideoPrefetchAnchorPostId(null);
+        schedulePlayingVideo(null, 0);
         return;
       }
 
-      const visibleVideoPost = viewableItems
-        .map(viewable => viewable.item as FeedRow | undefined)
-        .find(row => row?.kind === 'post' && Boolean(row.post.videoUrl));
+      const orderedVisiblePostIds = getOrderedViewablePostIds(viewableItems);
+      const nextPrefetchAnchorPostId = orderedVisiblePostIds[0] ?? null;
+      syncVideoPrefetchAnchorPostId(nextPrefetchAnchorPostId);
 
-      if (!visibleVideoPost || visibleVideoPost.kind !== 'post') {
-        setPlayingVideoPostId(null);
-        return;
-      }
+      const orderedVisibleVideoPostIds = getOrderedViewableVideoPostIds(viewableItems);
+      syncViewableVideoPostIds(orderedVisibleVideoPostIds);
+      const nextPostId = orderedVisibleVideoPostIds[0] ?? null;
 
-      const nextPostId = visibleVideoPost.post.id;
-      if (endedVideoByPostIdRef.current[nextPostId]) {
-        setPlayingVideoPostId(null);
+      if (!nextPostId) {
+        schedulePlayingVideo(null, FEED_AUTOPLAY_CLEAR_DELAY_MS);
         return;
       }
 
       if (playingVideoPostIdRef.current !== nextPostId) {
-        setPlayingVideoPostId(nextPostId);
+        schedulePlayingVideo(nextPostId, FEED_AUTOPLAY_SWITCH_DELAY_MS);
       }
     },
-    [activeLayer, isPeekMode],
+    [
+      canRenderFeedContent,
+      schedulePlayingVideo,
+      syncVideoPrefetchAnchorPostId,
+      syncViewableVideoPostIds,
+    ],
   );
 
   useEffect(() => {
-    if (activeLayer !== 'feed' || isPeekMode) {
-      setPlayingVideoPostId(null);
+    if (!canRenderFeedContent) {
+      clearPrefetchBatchTimeout();
+      syncViewableVideoPostIds([]);
+      syncVideoPrefetchAnchorPostId(null);
+      schedulePlayingVideo(null, 0);
     }
-  }, [activeLayer, isPeekMode]);
+  }, [
+    canRenderFeedContent,
+    clearPrefetchBatchTimeout,
+    schedulePlayingVideo,
+    syncVideoPrefetchAnchorPostId,
+    syncViewableVideoPostIds,
+  ]);
 
   useEffect(() => {
-    setPlayingVideoPostId(null);
-  }, [feedTab]);
+    clearPrefetchBatchTimeout();
+    syncVideoPrefetchAnchorPostId(null);
+    syncViewableVideoPostIds([]);
+    schedulePlayingVideo(null, 0);
+  }, [
+    clearPrefetchBatchTimeout,
+    feedTab,
+    schedulePlayingVideo,
+    syncVideoPrefetchAnchorPostId,
+    syncViewableVideoPostIds,
+  ]);
 
   useEffect(() => {
-    if (loading || activeLayer !== 'feed' || isPeekMode || playingVideoPostId) {
+    if (loading || !canRenderFeedContent || playingVideoPostId) {
       return;
     }
-    const firstVisibleVideo = visibleRowsData.find(
-      row =>
-        row.kind === 'post' &&
-        Boolean(row.post.videoUrl) &&
-        !endedVideoByPostId[row.post.id],
-    );
-    if (firstVisibleVideo?.kind === 'post') {
-      setPlayingVideoPostId(firstVisibleVideo.post.id);
+    const firstVisibleVideoPostId = viewableVideoPostIdsRef.current[0];
+    if (firstVisibleVideoPostId) {
+      schedulePlayingVideo(firstVisibleVideoPostId, FEED_AUTOPLAY_SWITCH_DELAY_MS);
     }
-  }, [activeLayer, endedVideoByPostId, isPeekMode, loading, playingVideoPostId, visibleRowsData]);
+  }, [canRenderFeedContent, loading, playingVideoPostId, schedulePlayingVideo, viewableVideoPostIds]);
+
+  useEffect(() => {
+    if (!canRenderFeedContent || !videoPrefetchAnchorPostId) {
+      clearPrefetchBatchTimeout();
+      return;
+    }
+
+    const targetVisibleRows = getTargetVisibleRowsForPostWindow(
+      feedRows,
+      videoPrefetchAnchorPostId,
+      FEED_POST_PREFETCH_WINDOW,
+    );
+    if (targetVisibleRows > visibleRows) {
+      setVisibleRows(previous => Math.min(feedRows.length, Math.max(previous, targetVisibleRows)));
+    }
+
+    const anchorIndex = filteredPostIndexById[videoPrefetchAnchorPostId];
+    if (typeof anchorIndex !== 'number') {
+      clearPrefetchBatchTimeout();
+      return;
+    }
+
+    clearPrefetchBatchTimeout();
+    prefetchBatchTimeoutRef.current = setTimeout(() => {
+      const upcomingPosts = filteredPosts
+        .slice(anchorIndex + 1, anchorIndex + 1 + FEED_POST_PREFETCH_WINDOW)
+        .map(item => item.post)
+        .filter(post => Boolean(post.videoUrl));
+      upcomingPosts.forEach(post => {
+        warmupVideoForPost(post).catch(() => {});
+      });
+    }, FEED_POST_PREFETCH_DELAY_MS);
+
+    return () => {
+      clearPrefetchBatchTimeout();
+    };
+  }, [
+    canRenderFeedContent,
+    clearPrefetchBatchTimeout,
+    feedRows,
+    filteredPostIndexById,
+    filteredPosts,
+    videoPrefetchAnchorPostId,
+    visibleRows,
+    warmupVideoForPost,
+  ]);
 
   return (
     <View style={styles.container}>
-      <View style={StyleSheet.absoluteFill} pointerEvents={activeLayer === 'map' ? 'auto' : 'none'}>
-        <MapView
-          ref={mapRef}
-          provider={PROVIDER_GOOGLE}
-          style={StyleSheet.absoluteFill}
-          region={mapDisplayRegion}
-          onRegionChangeComplete={onRegionChangeComplete}
-          scrollEnabled={activeLayer === 'map'}
-          zoomEnabled={activeLayer === 'map'}
-          rotateEnabled={activeLayer === 'map'}
-          pitchEnabled={activeLayer === 'map'}
-          showsCompass
-          showsUserLocation>
-          {spots.map(spot => {
-            const coordinates = getSpotCoordinates(spot);
-            if (!coordinates) {
-              return null;
-            }
-            return (
-              <Marker
-                key={spot.id}
-                coordinate={coordinates}
-                pinColor={highlightedSpotId === spot.id ? '#ef4444' : '#007BFF'}
-                onPress={() => {
-                  if (activeLayer === 'map') {
-                    setHighlightedSpotId(spot.id ?? null);
-                  }
-                }}
-              />
-            );
-          })}
-        </MapView>
-      </View>
+      {isScreenFocused ? (
+        <View style={StyleSheet.absoluteFill} pointerEvents={activeLayer === 'map' ? 'auto' : 'none'}>
+          <MapView
+            ref={mapRef}
+            provider={PROVIDER_GOOGLE}
+            style={StyleSheet.absoluteFill}
+            region={mapDisplayRegion}
+            onRegionChangeComplete={onRegionChangeComplete}
+            scrollEnabled={activeLayer === 'map'}
+            zoomEnabled={activeLayer === 'map'}
+            rotateEnabled={activeLayer === 'map'}
+            pitchEnabled={activeLayer === 'map'}
+            showsCompass
+            showsUserLocation>
+            {mapMarkers}
+          </MapView>
+        </View>
+      ) : null}
 
       {activeLayer === 'feed' ? (
         <>
@@ -1580,7 +1657,7 @@ export default function FeedScreen() {
           </TouchableOpacity>
         </View>
 
-        {activeLayer === 'feed' && !isPeekMode ? (
+        {canRenderFeedContent ? (
           <View style={styles.sheetContent}>
             <View style={styles.tabsRow}>
               {(['all', 'spots'] as FeedTab[]).map(tab => (
@@ -1626,6 +1703,9 @@ export default function FeedScreen() {
               </View>
             ) : (
               <FlatList
+                ref={instance => {
+                  feedListRef.current = instance;
+                }}
                 data={visibleRowsData}
                 keyExtractor={item =>
                   item.kind === 'ad' ? item.id : `post-${item.post.id}`
@@ -1635,41 +1715,33 @@ export default function FeedScreen() {
                 viewabilityConfig={viewabilityConfigRef.current}
                 onRefresh={() => refreshContent(true)}
                 refreshing={refreshing}
+                initialNumToRender={4}
+                maxToRenderPerBatch={6}
+                updateCellsBatchingPeriod={45}
+                windowSize={7}
+                removeClippedSubviews={false}
                 onEndReached={() => {
                   if (visibleRows < feedRows.length) {
                     setVisibleRows(prev => prev + 10);
                   }
                 }}
                 onEndReachedThreshold={0.35}
+                onScrollToIndexFailed={({index}) => {
+                  setVisibleRows(previous =>
+                    Math.max(previous, index + FEED_POST_PREFETCH_WINDOW),
+                  );
+                  setTimeout(() => {
+                    feedListRef.current?.scrollToIndex({
+                      index,
+                      animated: true,
+                      viewPosition: 0.06,
+                    });
+                  }, 180);
+                }}
                 contentContainerStyle={styles.listContent}
                 showsVerticalScrollIndicator={false}
               />
             )}
-
-            <TouchableOpacity
-              style={styles.fab}
-              onPress={() => {
-                Alert.alert(
-                  t('feed.publishMenuTitle'),
-                  '',
-                  [
-                    {
-                      text: t('common.cancel'),
-                      style: 'cancel',
-                    },
-                    {
-                      text: t('feed.publishSpot'),
-                      onPress: () => navigation.navigate('AddSpot'),
-                    },
-                    {
-                      text: t('feed.publishDronePost'),
-                      onPress: () => navigation.navigate('CreateDronePost'),
-                    },
-                  ],
-                );
-              }}>
-              <Icon name="plus" size={28} color="#fff" />
-            </TouchableOpacity>
           </View>
         ) : null}
       </Animated.View>
@@ -1690,19 +1762,8 @@ export default function FeedScreen() {
 
             <FlatList<Review | PostComment>
               data={(commentsModalMetric?.comments ?? []) as Array<Review | PostComment>}
-              keyExtractor={value =>
-                value.id ?? `${value.userId}-${getTimestampMillis(value.createdAt)}`
-              }
-              renderItem={({item: value}) => {
-                const author =
-                  profilesByUserId[value.userId]?.displayName || t('common.unknownUser');
-                return (
-                  <View style={styles.modalCommentRow}>
-                    <Text style={styles.commentAuthor}>{author}</Text>
-                    <Text style={styles.commentText}>{value.text ?? ''}</Text>
-                  </View>
-                );
-              }}
+              keyExtractor={commentKeyExtractor}
+              renderItem={renderModalCommentRow}
               ListEmptyComponent={
                 <Text style={styles.commentEmpty}>{t('feed.noCommentsYet')}</Text>
               }
@@ -1875,177 +1936,6 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '700',
   },
-  card: {
-    backgroundColor: '#fff',
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#dbe3ef',
-    overflow: 'hidden',
-    marginBottom: 12,
-    ...shadows.subtle,
-  },
-  cardHead: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    backgroundColor: '#f8fafc',
-  },
-  cardHeadLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-  },
-  cardHeadType: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: palette.textSecondary,
-    textTransform: 'uppercase',
-  },
-  cardHeadAuthor: {
-    color: palette.textMuted,
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  mediaFrame: {
-    height: 220,
-    backgroundColor: '#e2e8f0',
-  },
-  videoPressable: {
-    flex: 1,
-  },
-  imageView: {
-    width: SCREEN_WIDTH - 24,
-    height: 220,
-  },
-  videoView: {
-    width: '100%',
-    height: '100%',
-  },
-  videoPill: {
-    position: 'absolute',
-    left: 10,
-    bottom: 10,
-    borderRadius: 999,
-    backgroundColor: 'rgba(15, 23, 42, 0.74)',
-    paddingVertical: 4,
-    paddingHorizontal: 9,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-  },
-  videoTogglePill: {
-    position: 'absolute',
-    right: 10,
-    bottom: 10,
-    borderRadius: 999,
-    backgroundColor: 'rgba(15, 23, 42, 0.74)',
-    paddingVertical: 6,
-    paddingHorizontal: 6,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  videoPillText: {
-    color: '#fff',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  mediaFallback: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-  },
-  mediaFallbackText: {
-    color: palette.textMuted,
-    fontSize: 12,
-  },
-  cardContent: {
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    gap: 10,
-  },
-  postText: {
-    color: palette.textSecondary,
-    fontSize: 14,
-    lineHeight: 19,
-  },
-  linkText: {
-    color: palette.highlight,
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  spotMetaRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  spotRatingSummary: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  spotRatingText: {
-    color: palette.textSecondary,
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  mapButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: '#0f766e',
-    borderRadius: 8,
-    paddingVertical: 7,
-    paddingHorizontal: 10,
-  },
-  mapButtonText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  actionsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-  },
-  actionIconButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-  },
-  actionLabel: {
-    color: palette.textSecondary,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  inlineRatingWrap: {
-    gap: 5,
-    borderTopWidth: 1,
-    borderTopColor: '#edf2f7',
-    paddingTop: 8,
-  },
-  inlineSectionTitle: {
-    color: palette.textMuted,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  inlineRatingRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  commentsBlock: {
-    gap: 8,
-  },
-  commentBubble: {
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 10,
-    padding: 8,
-    backgroundColor: '#f8fafc',
-  },
   commentAuthor: {
     color: palette.textPrimary,
     fontSize: 12,
@@ -2062,35 +1952,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontStyle: 'italic',
   },
-  commentInputRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  commentInput: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: '#dbe3ef',
-    borderRadius: 10,
-    backgroundColor: '#fff',
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    fontSize: 13,
-    color: palette.textPrimary,
-  },
-  sendButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 10,
-    backgroundColor: palette.highlight,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  spotActionFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
   adCard: {
     borderWidth: 1,
     borderColor: '#dbe3ef',
@@ -2106,18 +1967,6 @@ const styles = StyleSheet.create({
     color: palette.textMuted,
     fontSize: 11,
     textTransform: 'uppercase',
-  },
-  fab: {
-    position: 'absolute',
-    right: 18,
-    bottom: 20,
-    width: 58,
-    height: 58,
-    borderRadius: 29,
-    backgroundColor: palette.highlight,
-    alignItems: 'center',
-    justifyContent: 'center',
-    ...shadows.medium,
   },
   mapModeHint: {
     flex: 1,

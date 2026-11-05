@@ -1,36 +1,87 @@
-// IMPORTANTE: Este es un texto de marcador de posición.
-// Consulta a un profesional legal para redactar tu política de privacidad.
-
 export const privacyPolicyText = `
-# Política de Privacidad
+# Política de Privacidad – Orbitadrone Spots
 
-**Última actualización: 20 de octubre de 2025**
+**Última actualización: 2026-03-17**
 
-Bienvenido a Orbitadrone Spots. Esta política de privacidad explica cómo recopilamos, usamos y compartimos tu información.
+Gracias por usar Orbitadrone Spots. Sabemos que el tema “datos/privacidad” suele sonar tostón, así que iremos al grano y sin humo.
 
-## 1. Información que Recopilamos
+Este documento explica qué datos recogemos, por qué, y cómo puedes ejercer control.
 
-*   **Información de la cuenta:** Cuando te registras, recopilamos tu nombre de usuario (displayName), correo electrónico y la información de perfil que proporcionas (biografía, redes sociales, etc.).
-*   **Contenido generado por el usuario:** Recopilamos los spots que creas, incluyendo ubicación, descripción e imágenes, así como las reseñas que publicas.
-*   **Datos de uso:** Podemos recopilar información sobre cómo interactúas con la aplicación.
+## 1 · El responsable
 
-## 2. Cómo Usamos tu Información
+Orbitadrone – Aplicación móvil “Orbitadrone Spots”.
 
-Usamos tu información para:
-*   Proveer y mantener el servicio.
-*   Personalizar tu experiencia.
-*   Mostrar tu perfil a otros usuarios.
-*   Comunicarnos contigo.
+Contacto oficial para temas de privacidad: orbitadrone22@gmail.com
 
-## 3. Cómo Compartimos tu Información
+## 2 · Qué datos recolectamos
 
-Tu nombre de usuario y el contenido que publicas (spots, reseñas) son públicos. No compartiremos tu correo electrónico con terceros sin tu consentimiento, excepto cuando sea requerido por la ley.
+Recogemos datos porque la app literalmente no puede funcionar sin ellos (ejemplo: mapa / spots / login).
 
-## 4. Seguridad
+### Cuenta y perfil
+- Email
+- Nombre / alias
+- Foto de perfil y portada
+- Redes sociales que tú decidas poner
+- Preferencias de vuelo
 
-Tomamos medidas razonables para proteger tu información, pero ningún sistema es 100% seguro.
+### Datos de contenido (publicaciones)
+- Spots que creas (ubicación aproximada, fotos y/o video)
+- Comentarios y reseñas
+- Estadísticas del spot (calculo de rating etc.)
 
-## 5. Cambios a esta Política
+### Datos técnicos
+- Idioma elegido en la app
+- Modelo del dispositivo
+- ID de notificación (token FCM)
+- Versión de la app
+- Datos de diagnóstico y fallos cuando la telemetría de errores está activa
 
-Podemos actualizar esta política de privacidad. Te notificaremos de cualquier cambio publicando la nueva política en esta página.
+### Ubicación
+Solo se usa para centrar el mapa y para autocompletar direcciones. No vendemos datos de ubicación. Nunca.
+
+### Multimedia
+- Imágenes suben a Firebase Storage
+- Vídeos suben a Bunny Stream
+
+## 3 · Por qué los usamos
+- Para autenticarte (Firebase Auth)
+- Para guardar spots, reseñas y perfiles (Firestore)
+- Para guardar y mostrar imágenes y videos (Storage + Bunny)
+- Para enviar notificaciones push y deep links
+- Para anuncios y versión premium (AdMob + RevenueCat)
+
+Todo orientado a que la app funcione.
+
+## 4 · Publicidad y monetización
+Usamos AdMob. Si pagas o ves un anuncio recompensado: RevenueCat gestiona quitar ads. No vendemos tus datos a terceros. Sí usamos datos técnicos “anónimos” para que el proveedor muestre anuncios relevantes.
+
+## 5 · Permisos que pedimos
+- Ubicación
+- Cámara / galería
+- Notificaciones
+
+Todos se piden explícitamente en el móvil.
+
+## 6 · Tus derechos
+Tienes derecho a:
+- Acceder
+- Rectificar
+- Borrar tu cuenta
+- Borrar contenido que hayas creado
+
+Hoy la app permite borrar la cuenta desde el perfil. Si necesitas solicitar una copia de tus datos o ejercer otros derechos, puedes escribirnos al correo de contacto.
+
+Cuando eliminas tu cuenta:
+- Iniciamos la eliminación de tu acceso y de los datos asociados a la cuenta
+- Retiramos o invalidamos los tokens de notificación vinculados a tu perfil
+- Podemos conservar la mínima información necesaria cuando exista una obligación legal, antifraude o de seguridad
+
+## 7 · Seguridad
+Usamos App Check de Firebase para evitar abuso automatizado y reglas de acceso en backend para proteger los datos. Algunas claves y configuraciones de cliente forman parte de la app porque son necesarias para conectar con servicios externos; las credenciales con privilegios no se exponen en el cliente.
+
+## 8 · Cambios a este documento
+Si cambiamos algo importante, te avisaremos dentro de la app.
+
+## 9 · Contacto
+orbitadrone22@gmail.com
 `;

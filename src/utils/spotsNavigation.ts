@@ -1,4 +1,11 @@
 import { Spot } from '../../src/services/firestoreService';
+import type {SpotVersionsRouteParams} from '../navigation/types';
+import logger from './logger';
+
+type SpotVersionsNavigation = {
+  navigate(screen: 'SpotVersions', params: SpotVersionsRouteParams): void;
+  navigate(screen: 'SpotDetail', params: {spotId: string}): void;
+};
 
 export const navigateToSpotAfterAd = async ({
   navigation,
@@ -6,7 +13,7 @@ export const navigateToSpotAfterAd = async ({
   fetchVersions,
   onFallback,
 }: {
-  navigation: any;
+  navigation: SpotVersionsNavigation;
   spotId: string;
   fetchVersions: (id: string) => Promise<Spot[]>;
   onFallback: () => void;
@@ -21,7 +28,7 @@ export const navigateToSpotAfterAd = async ({
       onFallback();
     }
   } catch (error) {
-    console.error("Error navigating to spot:", error);
+    logger.error('Error navigating to spot', error);
     onFallback();
   }
 };

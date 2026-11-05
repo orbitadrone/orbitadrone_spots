@@ -1,0 +1,36 @@
+diff --git a/node_modules/react-native-purchases/android/build.gradle b/node_modules/react-native-purchases/android/build.gradle
+index 822cf6a..a92ab20 100644
+--- a/node_modules/react-native-purchases/android/build.gradle
++++ b/node_modules/react-native-purchases/android/build.gradle
+@@ -65,8 +65,8 @@ repositories {
+ 
+     if (defaultDir.exists()) {
+         maven {
+-            url defaultDir.toString()
+-            name androidSourcesName
++            url = defaultDir.toString()
++            name = androidSourcesName
+         }
+ 
+         logger.info(":${project.name}:reactNativeAndroidRoot ${defaultDir.canonicalPath}")
+@@ -90,16 +90,16 @@ repositories {
+ 
+             if (androidPrebuiltBinaryDir.exists()) {
+                 maven {
+-                    url androidPrebuiltBinaryDir.toString()
+-                    name androidSourcesName
++                    url = androidPrebuiltBinaryDir.toString()
++                    name = androidSourcesName
+                 }
+ 
+                 logger.info(":${project.name}:reactNativeAndroidRoot ${androidPrebuiltBinaryDir.canonicalPath}")
+                 found = true
+             } else if (androidSourcesDir.exists()) {
+                 maven {
+-                    url androidSourcesDir.toString()
+-                    name androidSourcesName
++                    url = androidSourcesDir.toString()
++                    name = androidSourcesName
+                 }
+ 
+                 logger.info(":${project.name}:reactNativeAndroidRoot ${androidSourcesDir.canonicalPath}")

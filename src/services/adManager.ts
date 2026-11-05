@@ -1,90 +1,226 @@
 import {
+  AdEventType,
   InterstitialAd,
   RewardedAd,
   RewardedAdEventType,
-  AdEventType,
 } from 'react-native-google-mobile-ads';
-import { interstitialAdUnitId, rewardedAdUnitId } from '../constants/adUnits';
 
-// --- Configuración ---
-const MIN_TIME_BETWEEN_ADS = 120000; // 2 minutos
+import {adsDiagnosticsService} from './adsDiagnosticsService';
+import {interstitialAdUnitId, rewardedAdUnitId} from '../constants/adUnits';
+import logger from '../utils/logger';
+
+const MIN_TIME_BETWEEN_ADS = 90_000;
+const LOAD_WAIT_TIMEOUT_MS = 2_500;
+const LOAD_RETRY_DELAY_MS = 15_000;
+
+type LoadWaiter = (ready: boolean) => void;
 
 let lastAdShownTimestamp = 0;
 
-// --- Instancias de Anuncios ---
 const interstitial = InterstitialAd.createForAdRequest(interstitialAdUnitId);
 const rewarded = RewardedAd.createForAdRequest(rewardedAdUnitId);
 
 let isInitialized = false;
-let isInterstitialLoaded = false;
-let isRewardedLoaded = false;
 
-/**
- * Inicializa el gestor de anuncios. Carga los primeros anuncios.
- * Debe llamarse una sola vez al iniciar la aplicación.
- */
+let isInterstitialLoaded = false;
+let isInterstitialLoading = false;
+let isInterstitialShowing = false;
+let interstitialRetryTimeout: ReturnType<typeof setTimeout> | null = null;
+const interstitialWaiters = new Set<LoadWaiter>();
+
+let isRewardedLoaded = false;
+let isRewardedLoading = false;
+let isRewardedShowing = false;
+let rewardedRetryTimeout: ReturnType<typeof setTimeout> | null = null;
+const rewardedWaiters = new Set<LoadWaiter>();
+
+const notifyWaiters = (waiters: Set<LoadWaiter>, ready: boolean) => {
+  waiters.forEach(waiter => waiter(ready));
+  waiters.clear();
+};
+
+const clearInterstitialRetry = () => {
+  if (interstitialRetryTimeout) {
+    clearTimeout(interstitialRetryTimeout);
+    interstitialRetryTimeout = null;
+  }
+};
+
+const clearRewardedRetry = () => {
+  if (rewardedRetryTimeout) {
+    clearTimeout(rewardedRetryTimeout);
+    rewardedRetryTimeout = null;
+  }
+};
+
+const scheduleInterstitialRetry = () => {
+  if (interstitialRetryTimeout) {
+    return;
+  }
+  interstitialRetryTimeout = setTimeout(() => {
+    interstitialRetryTimeout = null;
+    requestInterstitialLoad();
+  }, LOAD_RETRY_DELAY_MS);
+};
+
+const scheduleRewardedRetry = () => {
+  if (rewardedRetryTimeout) {
+    return;
+  }
+  rewardedRetryTimeout = setTimeout(() => {
+    rewardedRetryTimeout = null;
+    requestRewardedLoad();
+  }, LOAD_RETRY_DELAY_MS);
+};
+
+const requestInterstitialLoad = () => {
+  if (isInterstitialLoaded || isInterstitialLoading) {
+    return;
+  }
+
+  isInterstitialLoading = true;
+  adsDiagnosticsService.recordLoadRequested('interstitial');
+  try {
+    interstitial.load();
+  } catch (error) {
+    isInterstitialLoading = false;
+    logger.warn('AdManager: Interstitial load request failed', error);
+    notifyWaiters(interstitialWaiters, false);
+    scheduleInterstitialRetry();
+  }
+};
+
+const requestRewardedLoad = () => {
+  if (isRewardedLoaded || isRewardedLoading) {
+    return;
+  }
+
+  isRewardedLoading = true;
+  adsDiagnosticsService.recordLoadRequested('rewarded');
+  try {
+    rewarded.load();
+  } catch (error) {
+    isRewardedLoading = false;
+    logger.warn('AdManager: Rewarded load request failed', error);
+    notifyWaiters(rewardedWaiters, false);
+    scheduleRewardedRetry();
+  }
+};
+
+const waitForLoad = (
+  isLoaded: () => boolean,
+  requestLoad: () => void,
+  waiters: Set<LoadWaiter>,
+  timeoutMs: number = LOAD_WAIT_TIMEOUT_MS,
+) =>
+  new Promise<boolean>(resolve => {
+    if (isLoaded()) {
+      resolve(true);
+      return;
+    }
+
+    const waiter: LoadWaiter = ready => {
+      clearTimeout(timeoutId);
+      waiters.delete(waiter);
+      resolve(ready);
+    };
+
+    const timeoutId = setTimeout(() => {
+      waiters.delete(waiter);
+      resolve(isLoaded());
+    }, timeoutMs);
+
+    waiters.add(waiter);
+    requestLoad();
+  });
+
 const initialize = () => {
   if (isInitialized) {
     return;
   }
 
-  // Listeners para Interstitial
   interstitial.addAdEventListener(AdEventType.LOADED, () => {
-    console.log('AdManager: Interstitial Ad loaded and ready.');
+    clearInterstitialRetry();
+    isInterstitialLoading = false;
     isInterstitialLoaded = true;
+    adsDiagnosticsService.recordLoaded('interstitial');
+    logger.info('AdManager: Interstitial Ad loaded and ready.');
+    notifyWaiters(interstitialWaiters, true);
   });
-  interstitial.addAdEventListener(AdEventType.ERROR, (error) => {
-    console.warn('AdManager: Interstitial Ad failed to load', error);
+
+  interstitial.addAdEventListener(AdEventType.ERROR, error => {
+    isInterstitialLoading = false;
     isInterstitialLoaded = false;
+    adsDiagnosticsService.recordFailed('interstitial', error);
+    logger.warn('AdManager: Interstitial Ad failed to load', error);
+    notifyWaiters(interstitialWaiters, false);
+    if (!isInterstitialShowing) {
+      scheduleInterstitialRetry();
+    }
   });
 
-  // Listeners para Rewarded
+  interstitial.addAdEventListener(AdEventType.CLOSED, () => {
+    isInterstitialShowing = false;
+    isInterstitialLoaded = false;
+    requestInterstitialLoad();
+  });
+
   rewarded.addAdEventListener(RewardedAdEventType.LOADED, () => {
-    console.log('AdManager: Rewarded Ad loaded and ready.');
+    clearRewardedRetry();
+    isRewardedLoading = false;
     isRewardedLoaded = true;
-  });
-  rewarded.addAdEventListener(RewardedAdEventType.EARNED_REWARD, (reward) => {
-    console.log(
-      'AdManager: User earned reward of ',
-      reward.amount,
-      reward.type,
-    );
-  });
-  rewarded.addAdEventListener(AdEventType.ERROR, (error) => {
-    console.warn('AdManager: Rewarded Ad failed to load', error);
-    isRewardedLoaded = false;
+    adsDiagnosticsService.recordLoaded('rewarded');
+    logger.info('AdManager: Rewarded Ad loaded and ready.');
+    notifyWaiters(rewardedWaiters, true);
   });
 
-  // Empezar a precargar los anuncios
-  interstitial.load();
-  rewarded.load();
+  rewarded.addAdEventListener(RewardedAdEventType.EARNED_REWARD, reward => {
+    logger.info('AdManager: User earned reward of', reward.amount, reward.type);
+  });
+
+  rewarded.addAdEventListener(AdEventType.ERROR, error => {
+    isRewardedLoading = false;
+    isRewardedLoaded = false;
+    isRewardedShowing = false;
+    adsDiagnosticsService.recordFailed('rewarded', error);
+    logger.warn('AdManager: Rewarded Ad failed to load', error);
+    notifyWaiters(rewardedWaiters, false);
+    scheduleRewardedRetry();
+  });
+
+  rewarded.addAdEventListener(AdEventType.CLOSED, () => {
+    isRewardedShowing = false;
+    isRewardedLoaded = false;
+    requestRewardedLoad();
+  });
+
+  requestInterstitialLoad();
+  requestRewardedLoad();
   isInitialized = true;
 };
 
-/**
- * Muestra un anuncio intersticial si está cargado y ha pasado el tiempo mínimo.
- * @param onAdClosed - Callback opcional que se ejecuta después de que el anuncio se cierra.
- * @param areAdsDisabled - Booleano que indica si los anuncios están deshabilitados.
- */
-const showInterstitialAd = (
-  onAdClosed?: () => void,
-  areAdsDisabled?: boolean,
-) => {
+const showInterstitialAd = (onAdClosed?: () => void, areAdsDisabled?: boolean) => {
+  initialize();
+
   if (areAdsDisabled) {
-    console.log('AdManager: Ads are disabled, skipping interstitial.');
+    logger.info('AdManager: Ads are disabled, skipping interstitial.');
+    onAdClosed?.();
+    return;
+  }
+
+  if (isInterstitialShowing) {
+    logger.info('AdManager: Interstitial already showing, skipping duplicate request.');
     onAdClosed?.();
     return;
   }
 
   const now = Date.now();
   if (now - lastAdShownTimestamp < MIN_TIME_BETWEEN_ADS) {
-    console.log('AdManager: Interstitial ad not shown, too recent.');
+    logger.info('AdManager: Interstitial ad not shown, too recent.');
     onAdClosed?.();
     return;
   }
 
-  // Asegurarnos de que siempre llamamos al callback,
-  // incluso si el anuncio falla al cargar o mostrar.
   let hasCompleted = false;
   const complete = () => {
     if (hasCompleted) {
@@ -94,72 +230,147 @@ const showInterstitialAd = (
     onAdClosed?.();
   };
 
-  // Listener de un solo uso para cuando el anuncio se haya cerrado
-  const closedListener = interstitial.addAdEventListener(AdEventType.CLOSED, () => {
-    console.log('AdManager: Interstitial ad closed.');
-    complete();
-    closedListener(); // Limpiar el listener
-    errorListener(); // Limpiar el listener de error asociado a esta llamada
-  });
+  const run = async () => {
+    const isReady = await waitForLoad(
+      () => isInterstitialLoaded,
+      requestInterstitialLoad,
+      interstitialWaiters,
+    );
 
-  // Listener de un solo uso para cuando el anuncio falle
-  const errorListener = interstitial.addAdEventListener(AdEventType.ERROR, (error) => {
-    console.warn('AdManager: Interstitial ad failed to show', error);
-    complete();
-    closedListener(); // Limpiar el listener de cerrado asociado a esta llamada
-    errorListener(); // Limpiar este listener
-  });
+    if (!isReady || isInterstitialShowing) {
+      logger.info('AdManager: Interstitial not ready in time, continuing without ad.');
+      complete();
+      return;
+    }
 
-  if (isInterstitialLoaded) {
-    console.log('AdManager: Interstitial ad was already loaded, showing now.');
-    interstitial.show();
-    lastAdShownTimestamp = now;
-    isInterstitialLoaded = false; // Marcar como usado
-    interstitial.load(); // Precargar el siguiente
-  } else {
-    console.log('AdManager: Interstitial ad not loaded, waiting for it to load...');
-    // Listener de un solo uso para cuando el anuncio se cargue
-    const loadedListener = interstitial.addAdEventListener(AdEventType.LOADED, () => {
-      console.log('AdManager: Interstitial ad finished loading, showing now.');
-      interstitial.show();
-      lastAdShownTimestamp = now;
-      isInterstitialLoaded = false; // Marcar como usado
-      loadedListener(); // Limpiar el listener
-      interstitial.load(); // Precargar el siguiente
+    let closedListener = () => {};
+    let errorListener = () => {};
+    const cleanup = () => {
+      closedListener();
+      errorListener();
+    };
+
+    closedListener = interstitial.addAdEventListener(AdEventType.CLOSED, () => {
+      logger.info('AdManager: Interstitial ad closed.');
+      cleanup();
+      complete();
     });
-    // Si no está cargado, iniciar la carga
-    interstitial.load();
-  }
+
+    errorListener = interstitial.addAdEventListener(AdEventType.ERROR, error => {
+      logger.warn('AdManager: Interstitial ad failed to show', error);
+      cleanup();
+      isInterstitialShowing = false;
+      requestInterstitialLoad();
+      complete();
+    });
+
+    try {
+      isInterstitialLoaded = false;
+      isInterstitialShowing = true;
+      lastAdShownTimestamp = Date.now();
+      adsDiagnosticsService.recordShown('interstitial');
+      interstitial.show();
+    } catch (error) {
+      logger.warn('AdManager: Interstitial show threw unexpectedly', error);
+      cleanup();
+      isInterstitialShowing = false;
+      requestInterstitialLoad();
+      complete();
+    }
+  };
+
+  run();
 };
 
-/**
- * Muestra un anuncio de recompensa si está cargado.
- * @param onRewardEarned - Callback que se ejecuta cuando el usuario ha ganado la recompensa.
- */
-const showRewardedAd = (onRewardEarned: () => void, onUnavailable?: () => void) => {
-  if (isRewardedLoaded) {
-    const rewardListener = rewarded.addAdEventListener(
+const showRewardedAd = (
+  onRewardEarned: () => void,
+  onUnavailable?: () => void,
+) => {
+  initialize();
+
+  if (isRewardedShowing) {
+    logger.info('AdManager: Rewarded already showing, ignoring duplicate request.');
+    onUnavailable?.();
+    return;
+  }
+
+  const run = async () => {
+    const isReady = await waitForLoad(
+      () => isRewardedLoaded,
+      requestRewardedLoad,
+      rewardedWaiters,
+    );
+
+    if (!isReady || isRewardedShowing) {
+      logger.info('AdManager: Rewarded ad not ready in time.');
+      onUnavailable?.();
+      return;
+    }
+
+    let rewardEarned = false;
+    let rewardListener = () => {};
+    let closedListener = () => {};
+    let errorListener = () => {};
+    const cleanup = () => {
+      rewardListener();
+      closedListener();
+      errorListener();
+    };
+
+    rewardListener = rewarded.addAdEventListener(
       RewardedAdEventType.EARNED_REWARD,
       () => {
+        rewardEarned = true;
         onRewardEarned();
-        rewardListener(); // Limpiar listener de un solo uso
-        // Precargar el siguiente anuncio de recompensa
-        isRewardedLoaded = false;
-        rewarded.load();
       },
     );
 
-    rewarded.show();
-  } else {
-    console.log('AdManager: Rewarded ad not loaded yet.');
-    onUnavailable?.();
-    rewarded.load();
-  }
+    closedListener = rewarded.addAdEventListener(AdEventType.CLOSED, () => {
+      cleanup();
+      if (!rewardEarned) {
+        logger.info('AdManager: Rewarded ad closed before reward was earned.');
+      }
+    });
+
+    errorListener = rewarded.addAdEventListener(AdEventType.ERROR, error => {
+      logger.warn('AdManager: Rewarded ad failed to show', error);
+      cleanup();
+      isRewardedShowing = false;
+      requestRewardedLoad();
+      onUnavailable?.();
+    });
+
+    try {
+      isRewardedLoaded = false;
+      isRewardedShowing = true;
+      adsDiagnosticsService.recordShown('rewarded');
+      rewarded.show();
+    } catch (error) {
+      logger.warn('AdManager: Rewarded show threw unexpectedly', error);
+      cleanup();
+      isRewardedShowing = false;
+      requestRewardedLoad();
+      onUnavailable?.();
+    }
+  };
+
+  run();
 };
 
+const preloadInterstitialAd = () => {
+  initialize();
+  requestInterstitialLoad();
+};
+
+const preloadRewardedAd = () => {
+  initialize();
+  requestRewardedLoad();
+};
 
 export const adManager = {
   initialize,
+  preloadInterstitialAd,
+  preloadRewardedAd,
   showInterstitialAd,
   showRewardedAd,
 };

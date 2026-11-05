@@ -10,6 +10,25 @@ jest.mock('react-i18next', () => ({
   useTranslation: jest.fn(),
 }));
 
+const mockRefreshCustomerInfo = jest.fn().mockResolvedValue(undefined);
+const mockDisableAdsForSession = jest.fn();
+const mockOpenPrivacyOptions = jest.fn().mockResolvedValue(undefined);
+
+jest.mock('../../context/AdContext', () => ({
+  useAds: () => ({
+    areAdsDisabled: false,
+    isPremium: false,
+    canRequestAds: true,
+    isConsentReady: true,
+    isGatheringConsent: false,
+    isPrivacyOptionsRequired: false,
+    disableAdsForSession: mockDisableAdsForSession,
+    refreshCustomerInfo: mockRefreshCustomerInfo,
+    refreshConsent: jest.fn(),
+    openPrivacyOptions: mockOpenPrivacyOptions,
+  }),
+}));
+
 const mockUseTranslation = useTranslation as jest.Mock;
 const mockPurchases = Purchases as jest.Mocked<typeof Purchases>;
 
@@ -20,6 +39,7 @@ describe('<RemoveAdsModal />', () => {
   beforeEach(() => {
     // Reiniciamos los mocks antes de cada prueba
     jest.clearAllMocks();
+    mockRefreshCustomerInfo.mockResolvedValue(undefined);
     
     mockUseTranslation.mockReturnValue({
       t: key => key, // Devolvemos la clave misma para simplificar la prueba
@@ -87,6 +107,24 @@ describe('<RemoveAdsModal />', () => {
   });
 
   it('calls purchasePackage when subscribe button is pressed', async () => {
+    const annualPackage = {
+      packageType: 'ANNUAL',
+      product: {
+        priceString: '€19.99',
+      },
+    };
+    const monthlyPackage = {
+      packageType: 'MONTHLY',
+      product: {
+        priceString: '€2.99',
+      },
+    };
+    mockPurchases.getOfferings.mockResolvedValue({
+      current: {
+        availablePackages: [annualPackage, monthlyPackage],
+      },
+    } as any);
+
     mockPurchases.purchasePackage.mockResolvedValue({
       customerInfo: { entitlements: { active: { [REMOVE_ADS_ENTITLEMENT_ID]: true } } },
     } as any);
@@ -98,6 +136,7 @@ describe('<RemoveAdsModal />', () => {
 
     await waitFor(() => {
       expect(mockPurchases.purchasePackage).toHaveBeenCalledTimes(1);
+      expect(mockPurchases.purchasePackage).toHaveBeenCalledWith(monthlyPackage);
       expect(mockOnClose).toHaveBeenCalledTimes(1); // Se cierra al comprar con éxito
     });
   });

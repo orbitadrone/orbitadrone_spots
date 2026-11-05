@@ -1,16 +1,58 @@
 import { Alert, Platform } from 'react-native';
-import messaging, { FirebaseMessagingTypes } from '@react-native-firebase/messaging';
+import {
+  AuthorizationStatus,
+  FirebaseMessagingTypes,
+  deleteToken,
+  getMessaging,
+  getToken,
+  hasPermission,
+  onMessage,
+  onTokenRefresh,
+  requestPermission,
+} from '@react-native-firebase/messaging';
 import Toast from 'react-native-toast-message';
 import { addUserNotificationToken, removeUserNotificationToken } from './firestoreService';
+import logger from '../utils/logger';
 
 const logPrefix = '[Messaging]';
+const messagingInstance = getMessaging();
+let tokenRefreshUnsubscribe: (() => void) | null = null;
+let tokenRefreshUserId: string | null = null;
 
 const isAuthorizationGranted = (status: FirebaseMessagingTypes.AuthorizationStatus) =>
-  status === messaging.AuthorizationStatus.AUTHORIZED ||
-  status === messaging.AuthorizationStatus.PROVISIONAL;
+  status === AuthorizationStatus.AUTHORIZED ||
+  status === AuthorizationStatus.PROVISIONAL;
+
+const syncTokenRefreshSubscription = (userId: string) => {
+  if (tokenRefreshUserId === userId && tokenRefreshUnsubscribe) {
+    return;
+  }
+
+  tokenRefreshUnsubscribe?.();
+  tokenRefreshUserId = userId;
+  tokenRefreshUnsubscribe = onTokenRefresh(messagingInstance, async refreshedToken => {
+    try {
+      await addUserNotificationToken(userId, refreshedToken);
+      logger.info(`${logPrefix} token refreshed`);
+    } catch (error) {
+      logger.error(`${logPrefix} failed to save refreshed token`, error);
+    }
+  });
+};
+
+export const stopFcmTokenRefreshSync = () => {
+  tokenRefreshUnsubscribe?.();
+  tokenRefreshUnsubscribe = null;
+  tokenRefreshUserId = null;
+};
+
+export const hasNotificationPermission = async () => {
+  const status = await hasPermission(messagingInstance);
+  return isAuthorizationGranted(status);
+};
 
 export const requestNotificationPermission = async () => {
-  const settings = await messaging().requestPermission();
+  const settings = await requestPermission(messagingInstance);
   const granted = isAuthorizationGranted(settings);
   if (!granted && Platform.OS === 'android') {
     Alert.alert(
@@ -21,56 +63,54 @@ export const requestNotificationPermission = async () => {
   return granted;
 };
 
-export const ensureFcmTokenForUser = async (userId: string) => {
+export const ensureFcmTokenForUser = async (
+  userId: string,
+  options: {promptIfNeeded?: boolean} = {},
+) => {
+  const {promptIfNeeded = true} = options;
   try {
-    const enabled = await requestNotificationPermission();
+    const enabled =
+      (await hasNotificationPermission()) ||
+      (promptIfNeeded ? await requestNotificationPermission() : false);
     if (!enabled) {
-      console.log(`${logPrefix} permission not granted`);
+      logger.info(`${logPrefix} permission not granted`);
       return null;
     }
 
-    const token = await messaging().getToken();
+    const token = await getToken(messagingInstance);
     if (!token) {
-      console.warn(`${logPrefix} failed to obtain FCM token`);
+      logger.warn(`${logPrefix} failed to obtain FCM token`);
       return null;
     }
 
     await addUserNotificationToken(userId, token);
-    console.log(`${logPrefix} token registered for user ${userId}`);
-
-    const unsubscribeTokenRefresh = messaging().onTokenRefresh(async refreshedToken => {
-      try {
-        await addUserNotificationToken(userId, refreshedToken);
-        console.log(`${logPrefix} token refreshed for user ${userId}`);
-      } catch (error) {
-        console.error(`${logPrefix} failed to save refreshed token`, error);
-      }
-    });
+    logger.info(`${logPrefix} token registered`);
+    syncTokenRefreshSubscription(userId);
 
     return {
       token,
-      unsubscribeTokenRefresh,
     };
   } catch (error) {
-    console.error(`${logPrefix} ensureFcmTokenForUser failed`, error);
+    logger.error(`${logPrefix} ensureFcmTokenForUser failed`, error);
     return null;
   }
 };
 
 export const clearFcmTokenForUser = async (userId: string) => {
   try {
-    const token = await messaging().getToken();
+    stopFcmTokenRefreshSync();
+    const token = await getToken(messagingInstance);
     if (!token) return;
     await removeUserNotificationToken(userId, token);
-    await messaging().deleteToken();
-    console.log(`${logPrefix} token removed for user ${userId}`);
+    await deleteToken(messagingInstance);
+    logger.info(`${logPrefix} token removed`);
   } catch (error) {
-    console.error(`${logPrefix} clearFcmTokenForUser failed`, error);
+    logger.error(`${logPrefix} clearFcmTokenForUser failed`, error);
   }
 };
 
 export const registerForegroundNotificationHandler = () =>
-  messaging().onMessage(async remoteMessage => {
+  onMessage(messagingInstance, async remoteMessage => {
     const title = remoteMessage.notification?.title ?? 'Nueva notificación';
     const body = remoteMessage.notification?.body ?? '';
     Toast.show({

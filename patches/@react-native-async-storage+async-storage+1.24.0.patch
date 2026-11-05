@@ -1,0 +1,43 @@
+diff --git a/node_modules/@react-native-async-storage/async-storage/android/build.gradle b/node_modules/@react-native-async-storage/async-storage/android/build.gradle
+index 4560dc7..95b24b2 100644
+--- a/node_modules/@react-native-async-storage/async-storage/android/build.gradle
++++ b/node_modules/@react-native-async-storage/async-storage/android/build.gradle
+@@ -39,9 +39,9 @@ if (isNewArchitectureEnabled) {
+ android {
+     def agpVersion = com.android.Version.ANDROID_GRADLE_PLUGIN_VERSION
+     if (agpVersion.tokenize('.')[0].toInteger() >= 7) {
+-        namespace "com.reactnativecommunity.asyncstorage"
++        namespace = "com.reactnativecommunity.asyncstorage"
+         buildFeatures {
+-            buildConfig true
++            buildConfig = true
+         }
+     }
+ 
+@@ -52,7 +52,7 @@ android {
+         ndkPath rootProject.ext.ndkPath
+     }
+     if (rootProject.hasProperty("ndkVersion")) {
+-        ndkVersion rootProject.ext.ndkVersion
++        ndkVersion = rootProject.ext.ndkVersion
+     }
+ 
+ 
+@@ -65,7 +65,7 @@ android {
+         buildConfigField "boolean", "IS_NEW_ARCHITECTURE_ENABLED", "${isNewArchitectureEnabled}"
+     }
+     lintOptions {
+-        abortOnError false
++        abortOnError = false
+     }
+ 
+     if (useNextStorage) {
+@@ -95,7 +95,7 @@ android {
+ repositories {
+     maven {
+         // All of React Native (JS, Obj-C sources, Android binaries) is installed from npm
+-        url "${project.ext.resolveModulePath("react-native")}/android"
++        url = "${project.ext.resolveModulePath("react-native")}/android"
+     }
+     google()
+     mavenCentral()
