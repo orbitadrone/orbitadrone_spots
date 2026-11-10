@@ -1,6 +1,6 @@
 {
   "name": "orbitadrone_spots_0_01",
-  "version": "1.1.18",
+  "version": "1.1.19",
   "private": true,
   "scripts": {
     "setup": "npm ci && npm ci --prefix functions && npm ci --prefix backend",
