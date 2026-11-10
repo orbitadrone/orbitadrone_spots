@@ -5,7 +5,6 @@ import {SafeAreaProvider} from 'react-native-safe-area-context';
 import {I18nextProvider} from 'react-i18next';
 import mobileAds from 'react-native-google-mobile-ads';
 import Geocoder from 'react-native-geocoding';
-import Purchases from 'react-native-purchases';
 import Toast from 'react-native-toast-message';
 import {
   FirebaseMessagingTypes,
@@ -39,16 +38,12 @@ import {appOpenAdManager} from './src/services/appOpenAdManager';
 import {useAdsConsent} from './src/hooks/useAdsConsent';
 import {isAdsConsentRefreshRetryable} from './src/services/adsConsentService';
 import logger from './src/utils/logger';
-import {hasRemoveAdsEntitlement} from './src/utils/purchases';
 import {adsDiagnosticsService} from './src/services/adsDiagnosticsService';
 import {
   APP_CHECK_DEBUG_TOKEN,
   GOOGLE_MAPS_API_KEY,
   GOOGLE_MAPS_API_KEY_ANDROID,
   GOOGLE_MAPS_API_KEY_IOS,
-  PURCHASES_API_KEY,
-  PURCHASES_API_KEY_ANDROID,
-  PURCHASES_API_KEY_IOS,
 } from '@env';
 import {initializeAppCheck, ReactNativeFirebaseAppCheckProvider} from '@react-native-firebase/app-check';
 
@@ -64,20 +59,6 @@ const styles = StyleSheet.create({
 const AppContent: React.FC = () => {
   const {user, loading} = useAuthContext();
   const lastRegisteredUserIdRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (!loading) {
-      if (user) {
-        Purchases.logIn(user.uid).catch(error => {
-          logger.warn('[Purchases] logIn failed', error);
-        });
-      } else {
-        Purchases.logOut().catch(error => {
-          logger.warn('[Purchases] logOut failed', error);
-        });
-      }
-    }
-  }, [user, loading]);
 
   const handleNotificationNavigation = useCallback((remoteMessage: FirebaseMessagingTypes.RemoteMessage | null) => {
     if (!remoteMessage) {
@@ -194,16 +175,6 @@ const App: React.FC = () => {
     refreshConsent,
   } = useAdsConsent();
 
-  const resolvePurchasesKey = useCallback(() => {
-    if (Platform.OS === 'android') {
-      return PURCHASES_API_KEY_ANDROID || PURCHASES_API_KEY;
-    }
-    if (Platform.OS === 'ios') {
-      return PURCHASES_API_KEY_IOS || PURCHASES_API_KEY;
-    }
-    return PURCHASES_API_KEY;
-  }, []);
-
   // Enable Firebase App Check on Android (Play Integrity)
   useEffect(() => {
     if (Platform.OS !== 'android' || appCheckInitAttemptedRef.current) {
@@ -267,20 +238,8 @@ const App: React.FC = () => {
     } else {
       Geocoder.init(mapsApiKey);
     }
+  }, []);
 
-    if (__DEV__) {
-      Purchases.setLogLevel(Purchases.LOG_LEVEL.DEBUG);
-    }
-
-    const purchasesApiKey = resolvePurchasesKey();
-    if (!purchasesApiKey) {
-      logger.warn(
-        `[Orbitadrone] RevenueCat API key missing for platform ${Platform.OS}. Purchases will not be configured.`,
-      );
-    } else {
-      Purchases.configure({apiKey: purchasesApiKey});
-    }
-  }, [resolvePurchasesKey]);
 
   useEffect(() => {
     if (consentRefreshStartedRef.current) {
@@ -348,20 +307,6 @@ const App: React.FC = () => {
     adsSdkInitializationStartedRef.current = true;
 
     const initAds = async () => {
-      const purchasesApiKey = resolvePurchasesKey();
-      if (purchasesApiKey && typeof Purchases.getCustomerInfo === 'function') {
-        try {
-          const customerInfo = await Purchases.getCustomerInfo();
-          if (hasRemoveAdsEntitlement(customerInfo)) {
-            logger.info('[Ads] Premium entitlement detected on launch. Skipping startup ads.');
-            setIsAppReady(true);
-            return;
-          }
-        } catch (error) {
-          logger.warn('[Ads] Failed to resolve startup premium status', error);
-        }
-      }
-
       await appOpenAdManager.configureRequestOptions();
 
       try {
@@ -379,7 +324,7 @@ const App: React.FC = () => {
     };
 
     initAds();
-  }, [canRequestAds, loadAppOpenAd, resolvePurchasesKey]);
+  }, [canRequestAds, loadAppOpenAd]);
 
   useEffect(() => {
     if (isAppReady) {

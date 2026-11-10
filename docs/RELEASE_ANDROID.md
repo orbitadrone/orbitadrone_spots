@@ -1,10 +1,10 @@
 # Release Android Checklist (Orbitadrone Spots)
 
-Estado actual: **solo Android está listo para release**. iOS sigue pendiente.
+Android es la plataforma activa. Prepara el entorno una vez con `npm run setup` y configura Firebase, Maps y la firma local.
 
 ## 1) Preflight
 - Node.js `22` LTS, JDK `17`, Android SDK `36` + Build Tools `36.0.0`.
-- `.env` completo (Firebase, Maps, RevenueCat, Bunny).
+- `.env` completo (Firebase, Maps y Bunny).
 - `android/local.properties` con `sdk.dir` y `GOOGLE_MAPS_API_KEY_ANDROID`.
 - `android/app/google-services.json` correcto para el proyecto Android.
 - Firma release validada:
@@ -21,7 +21,6 @@ Estado actual: **solo Android está listo para release**. iOS sigue pendiente.
 ## 3) Ads / Monetización
 - Verificar App ID AdMob Android en `app.json`.
 - Verificar Ad Unit IDs Android en `src/constants/adUnits.ts`.
-- Confirmar RevenueCat keys (`PURCHASES_API_KEY_ANDROID`) en `.env`.
 
 ## 4) Legal / Compliance
 - Confirmar textos legales actualizados en:
@@ -29,7 +28,7 @@ Estado actual: **solo Android está listo para release**. iOS sigue pendiente.
   - `src/legal/TermsOfService.ts`
 - Revisar enlace web de eliminación de cuenta (orbitadrone.com).
 - Confirmar que la ficha de `Data safety` refleja el comportamiento real y los SDK usados.
-- Revisar permisos declarados antes de cada release. En el estado actual deben quedar solo: ubicación, cámara, notificaciones y billing.
+- Revisar los permisos declarados de ubicación, cámara y notificaciones antes de cada release.
 
 ## 5) Seguridad / Reglas
 - Firestore rules actualizadas en `firestore.rules`.
@@ -54,13 +53,10 @@ Estado actual: **solo Android está listo para release**. iOS sigue pendiente.
 ## 7) Build Release (AAB)
 - Exportar credenciales de firma (`ORBITA_KEYSTORE_*`) o usar `android/keystore.properties`.
 - El keystore debe vivir fuera del repo. En local, usa una ruta tipo `${HOME}/.orbitadrone/keystores/...`.
-- Para automatización/CI, activa el modo estricto:
-  - `ORBITA_ENFORCE_SECURE_KEYSTORE=true ./gradlew clean bundleRelease`
-- Build:
-  - `cd android && ./gradlew clean bundleRelease`
-- Artefacto:
-  - `android/app/build/outputs/bundle/release/app-release.aab`
- - **Este AAB es el que se sube a Internal / Closed testing.**
+- Guarda los cambios de código y versión en un commit antes de compilar.
+- Ejecuta `npm run release:android` desde la raíz. El comando comprueba la firma y ejecuta Gradle.
+- Encontrarás el AAB en `dist/android/`, junto a un archivo con la versión, el commit y el SHA-256 del AAB.
+- Sube el AAB a **Internal testing** o **Closed testing** en Google Play Console.
 
 ## 8) Distribución de pruebas (obligatorio vía Google Play)
 - **Todas las pruebas de la app deben distribuirse por Google Play.**

@@ -149,7 +149,6 @@
     "changePasswordButton": "Cambiar Contraseña",
     "accountSectionTitle": "Cuenta",
     "adminPanelButton": "Panel Admin",
-    "manageSubscriptionButton": "Cancelar suscripción",
     "addBackgroundPhoto": "Añadir foto de fondo",
     "notLoggedInProfile": "Inicia sesión para ver tu perfil.",
     "socialsLabel": "Redes Sociales",
@@ -176,14 +175,6 @@
     "pilotMarkerNeedsLocation": "Debe haber una ubicación para guardar el marcador.",
     "pilotMarkerSavedTitle": "Marcador guardado",
     "pilotMarkerSavedMessage": "Tu foto ya queda visible para otros pilotos.",
-    "restorePurchasesButton": "Restaurar Compras",
-    "cancelSubscriptionModal": {
-      "title": "Cancelar suscripción",
-      "message": "Introduce tu contraseña para gestionar o cancelar la suscripción.",
-      "passwordPlaceholder": "Contraseña",
-      "cancelButton": "Volver",
-      "confirmButton": "Continuar"
-    },
     "deleteModal": {
       "title": "Eliminar Cuenta",
       "message": "Esta acción es irreversible. Para confirmar, por favor, introduce tu contraseña.",
@@ -191,25 +182,6 @@
       "cancelButton": "Cancelar",
       "confirmButton": "Eliminar Permanentemente"
     }
-  },
-  "affiliateStores": {
-    "title": "Tienda",
-    "subtitle": "Ofertas y recomendaciones en drones, accesorios y cámaras",
-    "button": "Ver tiendas",
-    "modalTitle": "Tiendas oficiales",
-    "modalSubtitle": "Selección de drones, accesorios y cámaras",
-    "storeTitle": "Tiendas",
-    "storeSubtitle": "Elige una tienda para ver categorías",
-    "categoriesSubtitle": "Selecciona una categoría",
-    "offersSubtitle": "Cupones y ofertas activas",
-    "loading": "Cargando tiendas...",
-    "offersLoading": "Cargando cupones...",
-    "empty": "No hay tiendas activas ahora mismo.",
-    "categoriesEmpty": "No hay categorías activas para esta tienda.",
-    "offersEmpty": "No hay cupones activos ahora mismo.",
-    "offersLoadError": "No se pudieron cargar los cupones.",
-    "couponCode": "Cupón: {{code}}",
-    "loadError": "No se pudieron cargar las tiendas."
   },
   "spotDetail": {
     "addReviewButton": "Añadir valoración",
@@ -239,25 +211,11 @@
     "reportSubmitButton": "Enviar denuncia",
     "reportCancelButton": "Cancelar"
   },
-  "removeAds": {
-    "title": "Eliminar Anuncios",
-    "subtitle": "Apoya el desarrollo de la app y disfruta de una experiencia sin interrupciones.",
-    "rewardOptionTitle": "Opción Gratuita",
-    "rewardOptionDescription": "Mira un anuncio corto para eliminar la publicidad durante tu sesión actual.",
-    "watchAdButton": "Ver Anuncio",
-    "premiumOptionTitle": "Sesión sin anuncios",
-    "premiumOptionDescription": "Suscríbete al plan \"{{planName}}\" para disfrutar la app sin anuncios y con beneficios exclusivos.",
-    "subscribeButton": "Suscribirse",
-    "rewardEarnedTitle": "¡Recompensa Obtenida!",
-    "rewardEarnedMessage": "Has desactivado los anuncios durante esta sesión. ¡Disfruta de la experiencia sin interrupciones!",
-    "rewardNotReady": "El anuncio con recompensa aún no está listo. Inténtalo de nuevo en unos momentos."
-  },
   "adsPrivacy": {
     "statusTitle": "Estado de anuncios",
     "preparingDescription": "Estamos preparando el consentimiento y la inicialización de anuncios para este dispositivo.",
     "availableDescription": "La app ya puede solicitar anuncios en este dispositivo.",
     "temporarilyUnavailableDescription": "Los anuncios no están disponibles ahora mismo. Puede ser un bloqueo temporal de consentimiento o falta de inventario.",
-    "premiumDisabledDescription": "Los anuncios están desactivados porque esta cuenta tiene una sesión premium o sin anuncios.",
     "syncErrorDescription": "No se pudo actualizar el consentimiento de anuncios. Reintenta para volver a habilitar la solicitud de anuncios.",
     "configErrorDescription": "Los anuncios no pueden activarse porque falta configurar el formulario de privacidad de AdMob para esta app.",
     "sdkPreparingDescription": "El SDK de anuncios sigue inicializándose.",
@@ -721,17 +679,12 @@
     "mySpots": "Mis publicaciones",
     "profile": "Configuración"
   },
-  "iap": {
-    "productNotFound": "Suscripción no disponible",
-    "restorePurchases": "Restaurar Compras",
-    "restoreSuccessTitle": "Compras Restauradas",
-    "restoreSuccessMessage": "Tus suscripciones activas han sido restauradas exitosamente.",
-    "restoreEmptyTitle": "No se encontraron compras",
-    "restoreEmptyMessage": "No encontramos ninguna suscripción activa para restaurar en tu cuenta.",
-    "restoreError": "Error al restaurar. Por favor, inténtalo de nuevo.",
-    "fetchError": "Error al cargar los productos. Por favor, inténtalo de nuevo.",
-    "purchaseSuccessTitle": "¡Gracias!",
-    "purchaseSuccessMessage": "Tu suscripción se ha activado correctamente.",
-    "purchaseError": "Error en la Compra"
+  "rewardedAds": {
+    "title": "Pausa de publicidad",
+    "description": "Mira un vídeo voluntario para pausar la publicidad durante esta sesión.",
+    "watchAdButton": "Ver vídeo y pausar anuncios",
+    "rewardEarnedTitle": "¡Recompensa Obtenida!",
+    "rewardEarnedMessage": "Has desactivado los anuncios durante esta sesión. ¡Disfruta de la experiencia sin interrupciones!",
+    "rewardNotReady": "El anuncio con recompensa aún no está listo. Inténtalo de nuevo en unos momentos."
   }
 }

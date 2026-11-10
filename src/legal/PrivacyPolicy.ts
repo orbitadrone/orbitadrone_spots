@@ -48,12 +48,12 @@ Solo se usa para centrar el mapa y para autocompletar direcciones. No vendemos d
 - Para guardar spots, reseñas y perfiles (Firestore)
 - Para guardar y mostrar imágenes y videos (Storage + Bunny)
 - Para enviar notificaciones push y deep links
-- Para anuncios y versión premium (AdMob + RevenueCat)
+- Para mostrar anuncios con AdMob y gestionar tus preferencias de publicidad
 
 Todo orientado a que la app funcione.
 
 ## 4 · Publicidad y monetización
-Usamos AdMob. Si pagas o ves un anuncio recompensado: RevenueCat gestiona quitar ads. No vendemos tus datos a terceros. Sí usamos datos técnicos “anónimos” para que el proveedor muestre anuncios relevantes.
+Usamos AdMob. Puedes ver un anuncio recompensado de forma voluntaria para pausar la publicidad durante la sesión. No ofrecemos compras ni membresías de pago dentro de la app. No vendemos tus datos a terceros. Sí usamos datos técnicos “anónimos” para que el proveedor muestre anuncios relevantes.
 
 ## 5 · Permisos que pedimos
 - Ubicación

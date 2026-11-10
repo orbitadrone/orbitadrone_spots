@@ -40,7 +40,6 @@ This project pins key dependency versions on purpose. The current Android target
 - `react-native-image-crop-picker@0.51.1`
 - `react-native-image-picker@8.2.1`
 - `react-native-maps@1.26.20`
-- `react-native-purchases@9.6.8`
 - `react-native-safe-area-context@5.6.2`
 - `react-native-screens@4.19.0`
 - `react-native-vector-icons@10.3.0`

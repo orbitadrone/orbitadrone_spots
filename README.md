@@ -1,6 +1,8 @@
-# OrbitaDrone Spots (Linux/WSL)
+# OrbitaDrone Spots
 
-Guía para desarrollar y compilar este proyecto (creado en Windows) desde un entorno Linux o WSL.
+GitHub contiene el código fuente y su historial. Cada versión para Google Play se compila desde un commit y genera un archivo AAB identificado con ese commit.
+
+Con Node 22 y la configuración de Android lista, ejecuta `npm run setup` tras clonar y `npm run release:android` para generar el AAB. Consulta la [guía de compilación](docs/RELEASE_ANDROID.md) y el [origen de la copia recuperada](docs/PROJECT_HISTORY.md).
 
 ## Estado de plataformas (24 de febrero de 2026)
 - **Android:** desarrollo y QA activos.
@@ -8,12 +10,12 @@ Guía para desarrollar y compilar este proyecto (creado en Windows) desde un ent
   - Mantén el soporte iOS en el repo, pero no generes builds de tienda ni distribuciones oficiales todavía.
 
 ## Qué hay en el repo
-- **App móvil:** React Native 0.83.1 (Android/iOS en el repo, pero **solo Android activo por ahora**) con Firebase, Google Maps, RevenueCat y Bunny.
+- **App móvil:** React Native 0.83.1 con Firebase, Google Maps, AdMob y Bunny. Android es la plataforma activa.
 - **backend/:** servicio Express para subir videos a Bunny.
 - **functions/:** Cloud Functions de Firebase para notificaciones.
 
 ## Prerrequisitos
-- Node.js 20 LTS y npm.
+- Node.js 22 y npm.
 - JDK 17 (React Native 0.83.x lo requiere).
 - Android Studio con SDK 36, Build Tools 36.0.0, NDK 27.1.12297006 y CMake 3.30.5.
 - Emulador o dispositivo Android con `adb` accesible (en WSL funciona mejor si el repo vive en el disco ext4, no en `/mnt/c`).
@@ -22,12 +24,12 @@ Guía para desarrollar y compilar este proyecto (creado en Windows) desde un ent
 ## Configuración inicial (Linux/WSL)
 1) Instala dependencias del proyecto:
 ```
-nvm use || true
-npm install
+nvm use
+npm run setup
 ```
 2) Copia y rellena variables:
 ```
-cp .env.example .env   # Llena claves de Firebase, Maps y RevenueCat
+cp .env.example .env   # Completa los valores locales de Firebase, Maps y Bunny.
 ```
 3) Android SDK/local props (`android/local.properties`):
 ```

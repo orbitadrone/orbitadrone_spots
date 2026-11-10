@@ -2,6 +2,8 @@
 
 Fecha de corte: `2026-03-17`
 
+Registro histórico de la versión que incluía membresías. Para preparar una nueva versión, consulta [la guía de Android](RELEASE_ANDROID.md).
+
 ## Baseline actual
 
 - `targetSdkVersion` y `compileSdkVersion`: `36`

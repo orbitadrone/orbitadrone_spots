@@ -23,8 +23,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Geolocation from '@react-native-community/geolocation';
 import CheckBox from '@react-native-community/checkbox';
 import { adManager } from '../../src/services/adManager';
-import RemoveAdsModal from '../components/RemoveAdsModal';
-import AffiliateStoreSheet from '../components/AffiliateStoreSheet';
+import RewardedAdModal from '../components/RewardedAdModal';
 import { useAds } from '../context/AdContext';
 import { useAuthContext } from '../context/AuthContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -62,7 +61,7 @@ export default function MapScreen() {
   const navigation = useNavigation<MainTabScreenNavigationProp<'Map'>>();
   const route = useRoute<MainTabScreenProps<'Map'>['route']>();
   const insets = useSafeAreaInsets();
-  const { areAdsDisabled, disableAdsForSession, isPremium } = useAds();
+  const { areAdsDisabled, disableAdsForSession } = useAds();
   const {
     region,
     setRegion,
@@ -112,8 +111,7 @@ export default function MapScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedStyles, setSelectedStyles] = useState<string[]>([]);
   const [isFilterModalVisible, setFilterModalVisible] = useState(false);
-  const [isRemoveAdsModalVisible, setRemoveAdsModalVisible] = useState(false);
-  const [isStoreMenuVisible, setStoreMenuVisible] = useState(false);
+  const [isRewardedAdModalVisible, setRewardedAdModalVisible] = useState(false);
   // --- Fin de estados para el buscador ---
 
   const animateToRegion = useCallback(
@@ -487,30 +485,25 @@ export default function MapScreen() {
 
   return (
     <View style={styles.container}>
-      <RemoveAdsModal
-        isVisible={isRemoveAdsModalVisible}
-        onClose={() => setRemoveAdsModalVisible(false)}
+      <RewardedAdModal
+        isVisible={isRewardedAdModalVisible}
+        onClose={() => setRewardedAdModalVisible(false)}
         onWatchAd={() => {
-          setRemoveAdsModalVisible(false);
+          setRewardedAdModalVisible(false);
           adManager.showRewardedAd(
             () => {
               // El usuario ha ganado la recompensa
               disableAdsForSession();
               Alert.alert(
-                t('removeAds.rewardEarnedTitle'),
-                t('removeAds.rewardEarnedMessage'),
+                t('rewardedAds.rewardEarnedTitle'),
+                t('rewardedAds.rewardEarnedMessage'),
               );
             },
             () => {
-              Alert.alert(t('alerts.error'), t('removeAds.rewardNotReady'));
+              Alert.alert(t('alerts.error'), t('rewardedAds.rewardNotReady'));
             },
           );
         }}
-      />
-      <AffiliateStoreSheet
-        visible={isStoreMenuVisible}
-        onClose={() => setStoreMenuVisible(false)}
-        source="map"
       />
       <MemoizedMapView
         mapRef={mapRef}
@@ -540,13 +533,11 @@ export default function MapScreen() {
           <TouchableOpacity style={styles.controlButton} onPress={handleCenterOnUserLocation}>
             <Icon name="crosshairs-gps" size={24} color="#333" />
           </TouchableOpacity>
-          {!isPremium ? (
-            <TouchableOpacity style={styles.controlButton} onPress={() => setRemoveAdsModalVisible(true)}>
-              <Icon name="crown-outline" size={24} color="#333" />
-            </TouchableOpacity>
-          ) : null}
-          <TouchableOpacity style={styles.controlButton} onPress={() => setStoreMenuVisible(true)}>
-            <Icon name="shopping-outline" size={24} color="#333" />
+          <TouchableOpacity
+            style={styles.controlButton}
+            accessibilityLabel={t('rewardedAds.title')}
+            onPress={() => setRewardedAdModalVisible(true)}>
+            <Icon name="play-circle-outline" size={24} color="#333" />
           </TouchableOpacity>
         </View>
         <View style={styles.searchContainer}>

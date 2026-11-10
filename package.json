@@ -3,6 +3,8 @@
   "version": "1.1.18",
   "private": true,
   "scripts": {
+    "setup": "npm ci && npm ci --prefix functions && npm ci --prefix backend",
+    "release:android": "node ./scripts/buildAndroidRelease.mjs",
     "android": "react-native run-android",
     "ios": "react-native run-ios",
     "start": "react-native start",
@@ -13,10 +15,11 @@
     "test:rules": "firebase emulators:exec --only firestore \"npm run test:rules:jest\"",
     "smoke:account-deletion": "node ./scripts/smokeAccountDeletion.mjs",
     "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
     "verify:deps": "node ./scripts/verifyPatchedDeps.mjs",
     "verify:release-signing": "node ./scripts/verifyReleaseSigning.mjs",
     "verify:release-signing:strict": "node ./scripts/verifyReleaseSigning.mjs --strict",
-    "verify:core": "npm run verify:deps && npm run lint && npm run test:unit",
+    "verify:core": "npm run verify:deps && npm run lint && npm run typecheck && npm run test:unit",
     "verify:android": "npm run verify:core && npm run test:rules"
   },
   "dependencies": {
@@ -52,7 +55,6 @@
     "react-native-image-picker": "8.2.1",
     "react-native-image-viewing": "0.2.2",
     "react-native-maps": "1.26.20",
-    "react-native-purchases": "9.6.8",
     "react-native-ratings": "8.1.0",
     "react-native-safe-area-context": "5.6.2",
     "react-native-screens": "4.19.0",
@@ -89,6 +91,7 @@
     "typescript": "5.9.3"
   },
   "jest": {
+    "cacheDirectory": "<rootDir>/node_modules/.cache/jest",
     "preset": "react-native",
     "setupFiles": [
       "./jest.setup.js"

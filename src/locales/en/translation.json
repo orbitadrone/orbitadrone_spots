@@ -161,7 +161,6 @@
     "changePasswordButton": "Change Password",
     "accountSectionTitle": "Account",
     "adminPanelButton": "Admin Panel",
-    "manageSubscriptionButton": "Cancel subscription",
     "addBackgroundPhoto": "Add background photo",
     "notLoggedInProfile": "Log in to see your profile.",
     "socialsLabel": "Social Networks",
@@ -188,14 +187,6 @@
     "pilotMarkerNeedsLocation": "Choose a location before saving.",
     "pilotMarkerSavedTitle": "Marker saved",
     "pilotMarkerSavedMessage": "Your photo is now visible to other pilots.",
-    "restorePurchasesButton": "Restore Purchases",
-    "cancelSubscriptionModal": {
-      "title": "Cancel subscription",
-      "message": "Enter your password to manage or cancel your subscription.",
-      "passwordPlaceholder": "Password",
-      "cancelButton": "Back",
-      "confirmButton": "Continue"
-    },
     "deleteModal": {
       "title": "Delete Account",
       "message": "This action is irreversible. To confirm, please enter your password.",
@@ -204,44 +195,11 @@
       "confirmButton": "Delete Permanently"
     }
   },
-  "affiliateStores": {
-    "title": "Store",
-    "subtitle": "Offers and recommendations on drones, accessories, and cameras",
-    "button": "View stores",
-    "modalTitle": "Official stores",
-    "modalSubtitle": "Curated drones, accessories, and cameras",
-    "storeTitle": "Stores",
-    "storeSubtitle": "Choose a store to browse categories",
-    "categoriesSubtitle": "Choose a category",
-    "offersSubtitle": "Active coupons and offers",
-    "loading": "Loading stores...",
-    "offersLoading": "Loading coupons...",
-    "empty": "No stores are active right now.",
-    "categoriesEmpty": "No active categories for this store.",
-    "offersEmpty": "No active coupons right now.",
-    "offersLoadError": "Couldn't load coupons.",
-    "couponCode": "Coupon: {{code}}",
-    "loadError": "Couldn't load stores."
-  },
-  "removeAds": {
-    "title": "Remove Ads",
-    "subtitle": "Support the app's development and enjoy an uninterrupted experience.",
-    "rewardOptionTitle": "Free Option",
-    "rewardOptionDescription": "Watch a short ad to remove all advertising for your current session.",
-    "watchAdButton": "Watch Ad",
-    "premiumOptionTitle": "Ad-free Session",
-    "premiumOptionDescription": "Subscribe to the \"{{planName}}\" plan to enjoy the app without ads and unlock exclusive benefits.",
-    "subscribeButton": "Subscribe",
-    "rewardEarnedTitle": "Reward Earned!",
-    "rewardEarnedMessage": "You have disabled ads for this session. Enjoy the uninterrupted experience!",
-    "rewardNotReady": "Rewarded ad is not ready yet. Please try again in a moment."
-  },
   "adsPrivacy": {
     "statusTitle": "Ads status",
     "preparingDescription": "The app is preparing consent and ad initialization for this device.",
     "availableDescription": "The app can already request ads on this device.",
     "temporarilyUnavailableDescription": "Ads are unavailable right now. This can be a temporary consent block or lack of inventory.",
-    "premiumDisabledDescription": "Ads are disabled because this account currently has a premium or ad-free session.",
     "syncErrorDescription": "Ad consent could not be refreshed. Retry to restore ad requests.",
     "configErrorDescription": "Ads cannot be enabled because the AdMob privacy form is not configured for this app.",
     "sdkPreparingDescription": "The ads SDK is still initializing.",
@@ -705,17 +663,12 @@
     "mySpots": "My Publications",
     "profile": "Settings"
   },
-  "iap": {
-    "productNotFound": "Subscription unavailable",
-    "restorePurchases": "Restore Purchases",
-    "restoreSuccessTitle": "Purchases Restored",
-    "restoreSuccessMessage": "Your active subscriptions have been successfully restored.",
-    "restoreEmptyTitle": "No Purchases Found",
-    "restoreEmptyMessage": "We couldn't find any active subscriptions to restore on your account.",
-    "restoreError": "Error restoring. Please try again.",
-    "fetchError": "Error fetching products. Please try again.",
-    "purchaseSuccessTitle": "Thank You!",
-    "purchaseSuccessMessage": "Your subscription has been activated successfully.",
-    "purchaseError": "Purchase Error"
+  "rewardedAds": {
+    "title": "Ad break",
+    "description": "Watch an optional video to pause ads for this session.",
+    "watchAdButton": "Watch video and pause ads",
+    "rewardEarnedTitle": "Reward Earned!",
+    "rewardEarnedMessage": "You have disabled ads for this session. Enjoy the uninterrupted experience!",
+    "rewardNotReady": "Rewarded ad is not ready yet. Please try again in a moment."
   }
 }

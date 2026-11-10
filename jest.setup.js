@@ -93,26 +93,6 @@ jest.mock('react-native-image-viewing', () => {
   };
 });
 
-// Mock RevenueCat purchases to avoid loading hybrid mappings (ESM) and native deps.
-jest.mock('react-native-purchases', () => {
-  const mockEntitlements = {active: {}};
-  const defaultMock = {
-    LOG_LEVEL: {DEBUG: 'DEBUG'},
-    configure: jest.fn(),
-    setLogLevel: jest.fn(),
-    logIn: jest.fn(),
-    logOut: jest.fn(),
-    getCustomerInfo: jest.fn().mockResolvedValue({entitlements: mockEntitlements}),
-    getOfferings: jest.fn().mockResolvedValue({current: {availablePackages: []}}),
-    purchasePackage: jest.fn().mockResolvedValue({customerInfo: {entitlements: mockEntitlements}}),
-    restorePurchases: jest.fn().mockResolvedValue({entitlements: mockEntitlements}),
-  };
-  return {
-    __esModule: true,
-    default: defaultMock,
-  };
-});
-
 // Mock Geocoder (ESM module) to avoid parse errors.
 jest.mock('react-native-geocoding', () => ({
   __esModule: true,

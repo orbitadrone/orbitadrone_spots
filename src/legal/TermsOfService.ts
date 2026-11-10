@@ -24,10 +24,8 @@ Si vuelas = es tu responsabilidad legal. Nosotros no somos instructores ni autor
 ## 5 · Moderación
 Nos reservamos el derecho de ocultar o eliminar contenido que: sea ofensivo, incite odio / acoso, sea ilegal, o infrinja derechos de autor.
 
-## 6 · Publicidad y compras
-La app tiene anuncios y modelo premium. RevenueCat gestiona tus compras y desactivación de anuncios.
-
-Si hay problemas de facturación → contacta con la store (Google/Apple).
+## 6 · Publicidad
+La app se financia con anuncios. También puedes ver un anuncio recompensado de forma voluntaria para pausar la publicidad durante la sesión. No ofrecemos tiendas, compras ni membresías de pago dentro de la app.
 
 ## 7 · Responsabilidad
 La app se proporciona “tal cual es”. No garantizamos: disponibilidad 24/7, ausencia total de fallos, exactitud absoluta de coordenadas / pronósticos.

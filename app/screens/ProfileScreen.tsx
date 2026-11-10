@@ -12,8 +12,6 @@ import {
   ImageBackground,
   Modal,
   Pressable,
-  Platform,
-  Linking,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
@@ -37,8 +35,7 @@ import Toast from 'react-native-toast-message';
 
 import { flightStylesOptions } from '../../src/constants/flightStyles';
 
-import RemoveAdsModal from '../components/RemoveAdsModal';
-import AffiliateStoreSheet from '../components/AffiliateStoreSheet';
+import RewardedAdModal from '../components/RewardedAdModal';
 import { useAuthContext } from '../context/AuthContext';
 import { useAds } from '../context/AdContext';
 import { adManager } from '../../src/services/adManager';
@@ -128,7 +125,6 @@ const ProfileScreen = () => {
     isConsentErrorRetryable,
     isConsentReady,
     isGatheringConsent,
-    isPremium,
     isPrivacyOptionsRequired,
     openPrivacyOptions,
     refreshConsent,
@@ -146,11 +142,9 @@ const ProfileScreen = () => {
   const pilotMarkerMapRef = useRef<MapView | null>(null);
   
   const [isDeleteModalVisible, setDeleteModalVisible] = useState(false);
-  const [isCancelSubscriptionModalVisible, setCancelSubscriptionModalVisible] = useState(false);
   const [password, setPassword] = useState('');
   const [reauthLoading, setReauthLoading] = useState(false);
-  const [isRemoveAdsModalVisible, setRemoveAdsModalVisible] = useState(false);
-  const [isStoreMenuVisible, setStoreMenuVisible] = useState(false);
+  const [isRewardedAdModalVisible, setRewardedAdModalVisible] = useState(false);
   const [isAdminUser, setIsAdminUser] = useState(false);
   const [likesLoading, setLikesLoading] = useState(false);
   const [likesReceivedTotal, setLikesReceivedTotal] = useState(0);
@@ -188,9 +182,6 @@ const ProfileScreen = () => {
   }, [adsDiagnostics.placements, t]);
 
   const adsStatusMessage = useMemo(() => {
-    if (isPremium) {
-      return t('adsPrivacy.premiumDisabledDescription');
-    }
     if (isGatheringConsent || !isConsentReady) {
       return t('adsPrivacy.preparingDescription');
     }
@@ -219,7 +210,6 @@ const ProfileScreen = () => {
     isConsentErrorRetryable,
     isConsentReady,
     isGatheringConsent,
-    isPremium,
     isPrivacyOptionsRequired,
     t,
   ]);
@@ -443,25 +433,6 @@ const ProfileScreen = () => {
 
   const handleLogout = () => {
     signOut(auth).catch(() => Alert.alert(t('alerts.error'), t('alerts.logoutError')));
-  };
-
-  const openCancelSubscriptionModal = () => {
-    setPassword('');
-    setCancelSubscriptionModalVisible(true);
-  };
-
-  const handleManageSubscription = async () => {
-    try {
-      if (Platform.OS === 'ios') {
-        Linking.openURL('https://apps.apple.com/account/subscriptions');
-      } else {
-        Linking.openURL('https://play.google.com/store/account/subscriptions');
-      }
-      setCancelSubscriptionModalVisible(false);
-    } catch (error) {
-      logger.error('[Profile] manageSubscriptions failed', error);
-      Alert.alert(t('alerts.error'), t('alerts.manageSubscriptionError'));
-    }
   };
 
   const handleDeleteAccountPress = () => {
@@ -695,24 +666,6 @@ const ProfileScreen = () => {
           )}
         </View>
 
-        <View style={styles.storeSection}>
-          <View style={styles.storeHeader}>
-            <View style={styles.storeInfo}>
-              <Text style={styles.sectionHeading}>{t('affiliateStores.title')}</Text>
-              <Text style={styles.storeSubtext}>
-                {t('affiliateStores.subtitle')}
-              </Text>
-            </View>
-            <TouchableOpacity
-              style={styles.storeButton}
-              onPress={() => setStoreMenuVisible(true)}>
-              <Icon name="shopping-outline" size={18} color="#fff" />
-              <Text style={styles.storeButtonText}>
-                {t('affiliateStores.button')}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
 
         <Text style={styles.label}>{t('profile.displayNameLabel')}</Text>
         <TextInput style={styles.input} value={profile.displayName} onChangeText={text => setProfile(p => ({ ...p, displayName: text }))} placeholder={t('profile.displayNamePlaceholder')} />
@@ -820,45 +773,41 @@ const ProfileScreen = () => {
               />
             </View>
           )}
-          {!isPremium ? (
-            <>
+          <View style={styles.actionButtonContainer}>
+            <CustomButton
+              title={t('rewardedAds.title')}
+              variant="outline"
+              color="#22c55e"
+              textColor="#22c55e"
+              onPress={() => setRewardedAdModalVisible(true)}
+            />
+          </View>
+          <View style={styles.adsStatusCard}>
+            <Text style={styles.sectionHeading}>{t('adsPrivacy.statusTitle')}</Text>
+            <Text style={styles.adsStatusText}>{adsStatusMessage}</Text>
+            {adsLastErrorText ? (
+              <Text style={styles.adsStatusMeta}>
+                {t('adsPrivacy.lastErrorLabel')}: {adsLastErrorText}
+              </Text>
+            ) : null}
+            {(consentError && isConsentErrorRetryable) || !isConsentReady ? (
               <View style={styles.actionButtonContainer}>
                 <CustomButton
-                  title={t('removeAds.title')}
+                  title={t('adsPrivacy.retryButton')}
                   variant="outline"
-                  color="#22c55e"
-                  textColor="#22c55e"
-                  onPress={() => setRemoveAdsModalVisible(true)}
+                  color="#2563eb"
+                  textColor="#2563eb"
+                  disabled={isGatheringConsent}
+                  onPress={() => {
+                    refreshConsent().catch(error => {
+                      logger.error('[Profile] refreshConsent failed', error);
+                      Alert.alert(t('alerts.error'), t('adsPrivacy.retryError'));
+                    });
+                  }}
                 />
               </View>
-              <View style={styles.adsStatusCard}>
-                <Text style={styles.sectionHeading}>{t('adsPrivacy.statusTitle')}</Text>
-                <Text style={styles.adsStatusText}>{adsStatusMessage}</Text>
-                {adsLastErrorText ? (
-                  <Text style={styles.adsStatusMeta}>
-                    {t('adsPrivacy.lastErrorLabel')}: {adsLastErrorText}
-                  </Text>
-                ) : null}
-                {(consentError && isConsentErrorRetryable) || !isConsentReady ? (
-                  <View style={styles.actionButtonContainer}>
-                    <CustomButton
-                      title={t('adsPrivacy.retryButton')}
-                      variant="outline"
-                      color="#2563eb"
-                      textColor="#2563eb"
-                      disabled={isGatheringConsent}
-                      onPress={() => {
-                        refreshConsent().catch(error => {
-                          logger.error('[Profile] refreshConsent failed', error);
-                          Alert.alert(t('alerts.error'), t('adsPrivacy.retryError'));
-                        });
-                      }}
-                    />
-                  </View>
-                ) : null}
-              </View>
-            </>
-          ) : null}
+            ) : null}
+          </View>
           <View style={styles.actionButtonContainer}>
             <CustomButton
               title={t('profile.changePasswordButton')}
@@ -893,15 +842,6 @@ const ProfileScreen = () => {
             ) : null}
             <View style={styles.actionButtonContainer}>
               <CustomButton
-                title={t('profile.manageSubscriptionButton')}
-                variant="outline"
-                color="#e53935"
-                textColor="#e53935"
-                onPress={openCancelSubscriptionModal}
-              />
-            </View>
-            <View style={styles.actionButtonContainer}>
-              <CustomButton
                 title={t('profile.deleteAccountButton')}
                 variant="outline"
                 color="#e53935"
@@ -917,26 +857,21 @@ const ProfileScreen = () => {
         <View style={styles.centeredView}><View style={styles.modalView}><Text style={styles.modalTitle}>{t('profile.deleteModal.title')}</Text><Text style={styles.modalText}>{t('profile.deleteModal.message')}</Text><TextInput style={styles.modalInput} placeholder={t('profile.deleteModal.passwordPlaceholder')} value={password} onChangeText={setPassword} secureTextEntry /><View style={styles.modalButtonContainer}>{reauthLoading ? <ActivityIndicator size="large" /> : <><Pressable style={[styles.button, styles.buttonCancel]} onPress={() => setDeleteModalVisible(false)}><Text style={styles.textStyle}>{t('profile.deleteModal.cancelButton')}</Text></Pressable><Pressable style={[styles.button, styles.buttonConfirm]} onPress={handleReauthenticateAndDelete}><Text style={styles.textStyle}>{t('profile.deleteModal.confirmButton')}</Text></Pressable></>}</View></View></View>
       </Modal>
 
-      <RemoveAdsModal 
-        isVisible={isRemoveAdsModalVisible} 
-        onClose={() => setRemoveAdsModalVisible(false)}
+      <RewardedAdModal
+        isVisible={isRewardedAdModalVisible}
+        onClose={() => setRewardedAdModalVisible(false)}
         onWatchAd={() => {
-          setRemoveAdsModalVisible(false);
+          setRewardedAdModalVisible(false);
           adManager.showRewardedAd(
             () => {
               disableAdsForSession();
-              Alert.alert(t('removeAds.rewardEarnedTitle'), t('removeAds.rewardEarnedMessage'));
+              Alert.alert(t('rewardedAds.rewardEarnedTitle'), t('rewardedAds.rewardEarnedMessage'));
             },
             () => {
-              Alert.alert(t('alerts.error'), t('removeAds.rewardNotReady'));
+              Alert.alert(t('alerts.error'), t('rewardedAds.rewardNotReady'));
             },
           );
         }}
-      />
-      <AffiliateStoreSheet
-        visible={isStoreMenuVisible}
-        onClose={() => setStoreMenuVisible(false)}
-        source="profile"
       />
       <Modal
         animationType="slide"
@@ -981,65 +916,6 @@ const ProfileScreen = () => {
                   <Text style={styles.pilotMarkerButtonText}>{t('profile.pilotMarkerSaveButton')}</Text>
                 )}
               </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-      <Modal animationType="slide" transparent={true} visible={isCancelSubscriptionModalVisible} onRequestClose={() => setCancelSubscriptionModalVisible(false)}>
-        <View style={styles.centeredView}>
-          <View style={styles.modalView}>
-            <Text style={styles.modalTitle}>{t('profile.cancelSubscriptionModal.title')}</Text>
-            <Text style={styles.modalText}>{t('profile.cancelSubscriptionModal.message')}</Text>
-            <TextInput
-              style={styles.modalInput}
-              placeholder={t('profile.cancelSubscriptionModal.passwordPlaceholder')}
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry
-            />
-            <View style={styles.modalButtonContainer}>
-              {reauthLoading ? (
-                <ActivityIndicator size="large" />
-              ) : (
-                <>
-                  <Pressable
-                    style={[styles.button, styles.buttonCancel]}
-                    onPress={() => {
-                      setCancelSubscriptionModalVisible(false);
-                      setPassword('');
-                    }}
-                  >
-                    <Text style={styles.textStyle}>{t('profile.cancelSubscriptionModal.cancelButton')}</Text>
-                  </Pressable>
-                  <Pressable
-                    style={[styles.button, styles.buttonConfirm]}
-                    onPress={async () => {
-                      if (!user || !password) {
-                        Alert.alert(t('alerts.attention'), t('alerts.enterPasswordPrompt'));
-                        return;
-                      }
-                      setReauthLoading(true);
-                      try {
-                        const credential = EmailAuthProvider.credential(user.email!, password);
-                        await user.reauthenticateWithCredential(credential);
-                        await handleManageSubscription();
-                      } catch (error: any) {
-                        if (error?.code === 'auth/wrong-password') {
-                          Alert.alert(t('alerts.error'), t('alerts.wrongPasswordError'));
-                        } else {
-                          logger.error('[Profile] Subscription reauth failed', error);
-                          Alert.alert(t('alerts.error'), t('alerts.reauthFailedError'));
-                        }
-                      } finally {
-                        setReauthLoading(false);
-                        setPassword('');
-                      }
-                    }}
-                  >
-                    <Text style={styles.textStyle}>{t('profile.cancelSubscriptionModal.confirmButton')}</Text>
-                  </Pressable>
-                </>
-              )}
             </View>
           </View>
         </View>
@@ -1099,42 +975,6 @@ const styles = StyleSheet.create({
   likesEmpty: {
     color: palette.textMuted,
     fontSize: 12,
-  },
-  storeSection: {
-    marginBottom: 16,
-    padding: 16,
-    borderRadius: radii.lg,
-    borderWidth: 1,
-    borderColor: palette.borderLight,
-    backgroundColor: palette.backgroundCard,
-    ...shadows.subtle,
-  },
-  storeHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  storeInfo: {
-    flex: 1,
-    paddingRight: 12,
-  },
-  storeSubtext: {
-    marginTop: 4,
-    fontSize: 13,
-    color: palette.textSecondary,
-  },
-  storeButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: radii.lg,
-    backgroundColor: palette.accent,
-  },
-  storeButtonText: {
-    marginLeft: 6,
-    color: '#fff',
-    fontWeight: '600',
   },
   radioContainer: { flexDirection: 'row', justifyContent: 'space-between', flexWrap: 'wrap', marginBottom: 12 },
   radioButton: { flexDirection: 'row', alignItems: 'center', width: '48%', marginBottom: 8 },

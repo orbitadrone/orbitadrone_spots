@@ -25,32 +25,28 @@
      ```
    - Tras añadir el SHA-1 en Firebase Console, descarga `google-services.json` actualizado y reemplaza `android/app/google-services.json`.
 
-3. **RevenueCat keys**
-   - Las claves se leen por plataforma: define `PURCHASES_API_KEY_ANDROID`, `PURCHASES_API_KEY_IOS` y, opcionalmente, `PURCHASES_API_KEY` como fallback común en el `.env`.
-   - El arranque de la app registra una advertencia si falta la clave correspondiente al dispositivo.
-
-4. **GoogleService-Info (iOS)**
+3. **GoogleService-Info (iOS)**
    - **iOS no está listo para release.** Por ahora solo mantenemos el template `ios/GoogleService-Info.plist.template`.
    - Cuando se retome iOS, se deberá generar el `GoogleService-Info.plist` real y verificar que esté incluido en el target correcto.
 
-5. **Runtime de Node**
+4. **Runtime de Node**
    - El estándar del repo es **Node `22`**.
    - Está fijado en `.nvmrc`, `.node-version`, `package.json` y alineado con `functions/`.
    - La razón no es arbitraria: `functions` ya despliega sobre `nodejs22`, y el stack actual del repo (`verify:core`, `verify:android` y `assembleDebug`) se ha validado localmente con Node `22`, evitando además depender del shell local en `Node 25.x`.
 
-6. **Permisos nativos**
+5. **Permisos nativos**
    - **Android**: solicitamos ubicación, cámara y notificaciones desde `requestEssentialPermissions`. La selección de fotos y vídeos usa el Photo Picker sin permisos de galería.
    - **iOS**: se añadieron descripciones de uso de micrófono, cámara, ubicación y librería en `Info.plist`. Confirma que el texto sea consistente antes de subir a la tienda.
 
-7. **General secret handling**
+6. **Configuración privada**
    - Nunca vuelvas a commitear `.env`: duplica `cp .env.example .env` y rellena los valores de forma local o vía variables de entorno/secretos de CI.
    - Para la firma Android, copia `cp android/keystore.properties.example android/keystore.properties` (el archivo real está gitignored) o exporta `ORBITA_KEYSTORE_*` antes de ejecutar Gradle.
    - Mantén el keystore fuera del repo (por ejemplo `${HOME}/.orbitadrone/keystores/orbitadrone_release.keystore`) y sincronízalo solo por un canal seguro.
    - Valida la configuración con `npm run verify:release-signing`. Para una comprobación estricta antes de release/CI, usa `npm run verify:release-signing:strict`.
-   - Para QA en Android, valida la configuración desde Google Play (Internal testing / Closed testing) y confirma que Maps, login, compras y ads inicialicen sin warnings.
+   - Para QA en Android, valida Maps, inicio de sesión y anuncios desde Google Play (Internal testing / Closed testing).
    - Recuerda incrementar `versionCode` antes de cada subida a Play.
 
-8. **Smoke test de borrado de cuenta**
+7. **Smoke test de borrado de cuenta**
    - Comando:
      ```bash
      npm run smoke:account-deletion
