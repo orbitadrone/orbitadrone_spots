@@ -1,51 +1,62 @@
-import React, { createContext, useState, useContext, ReactNode, useEffect } from 'react';
-import Purchases from 'react-native-purchases';
-import { REMOVE_ADS_ENTITLEMENT_ID } from '../../src/constants/purchases';
+import React, { createContext, useState, useContext, ReactNode, useCallback, useMemo } from 'react';
+import logger from '../../src/utils/logger';
+import {useAdsConsent} from '../../src/hooks/useAdsConsent';
+import {isAdsConsentRefreshRetryable} from '../../src/services/adsConsentService';
 
 interface AdContextType {
   areAdsDisabled: boolean;
-  isPremium: boolean;
+  canRequestAds: boolean;
+  isConsentReady: boolean;
+  isGatheringConsent: boolean;
+  isPrivacyOptionsRequired: boolean;
+  consentError: Error | null;
+  isConsentErrorRetryable: boolean;
   disableAdsForSession: () => void;
+  refreshConsent: () => Promise<unknown>;
+  openPrivacyOptions: () => Promise<unknown>;
 }
 
 const AdContext = createContext<AdContextType | undefined>(undefined);
 
 export const AdProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [isSessionAdsDisabled, setIsSessionAdsDisabled] = useState(false);
-  const [isPremium, setIsPremium] = useState(false);
+  const {
+    canRequestAds,
+    error,
+    hasCompletedFirstSync,
+    isGatheringConsent,
+    privacyOptionsRequirementStatus,
+    refreshConsent,
+    openPrivacyOptions,
+  } = useAdsConsent();
 
-  useEffect(() => {
-    let removeListener: (() => void) | undefined;
-
-    const init = async () => {
-      try {
-        const customerInfo = await Purchases.getCustomerInfo();
-        setIsPremium(Boolean(customerInfo.entitlements.active[REMOVE_ADS_ENTITLEMENT_ID]));
-      } catch (err) {
-        console.error('Error checking subscription status', err);
-      }
-      removeListener = Purchases.addCustomerInfoUpdateListener((customerInfo) => {
-        setIsPremium(Boolean(customerInfo.entitlements.active[REMOVE_ADS_ENTITLEMENT_ID]));
-      });
-    };
-
-    init();
-
-    return () => {
-      removeListener?.();
-    };
+  const disableAdsForSession = useCallback(() => {
+    logger.info('Ads disabled for this session.');
+    setIsSessionAdsDisabled(true);
   }, []);
 
-  const disableAdsForSession = () => {
-    console.log('Ads disabled for this session.');
-    setIsSessionAdsDisabled(true);
-  };
-
-  const value = {
-    areAdsDisabled: isPremium || isSessionAdsDisabled,
-    isPremium,
+  const value = useMemo(() => ({
+    areAdsDisabled: isSessionAdsDisabled || !canRequestAds,
+    canRequestAds,
+    isConsentReady: hasCompletedFirstSync,
+    isGatheringConsent,
+    isPrivacyOptionsRequired: privacyOptionsRequirementStatus === 'REQUIRED',
+    consentError: error,
+    isConsentErrorRetryable: isAdsConsentRefreshRetryable(error),
     disableAdsForSession,
-  };
+    refreshConsent,
+    openPrivacyOptions,
+  }), [
+    canRequestAds,
+    error,
+    disableAdsForSession,
+    hasCompletedFirstSync,
+    isGatheringConsent,
+    isSessionAdsDisabled,
+    openPrivacyOptions,
+    privacyOptionsRequirementStatus,
+    refreshConsent,
+  ]);
 
   return <AdContext.Provider value={value}>{children}</AdContext.Provider>;
 };

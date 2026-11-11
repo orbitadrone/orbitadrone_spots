@@ -1,14 +1,18 @@
 
 import React, { useState } from 'react';
-import { View, Text, TextInput, Button, StyleSheet, Image, TouchableOpacity, ScrollView, Linking } from 'react-native';
+import { View, Text, TextInput, StyleSheet, Image, TouchableOpacity, ScrollView, Linking } from 'react-native';
 import { sendPasswordResetEmail, signInWithEmailAndPassword } from '@react-native-firebase/auth';
 import { auth } from '../../src/firebaseConfig';
 import { useTranslation } from 'react-i18next';
 import LanguageSelector from '../components/LanguageSelector';
 import Dialog from "react-native-dialog";
 import Toast from 'react-native-toast-message';
+import CustomButton from '../components/CustomButton';
+import { palette, radii, shadows } from '../../src/constants/theme';
+import logger from '../../src/utils/logger';
+import type {RootStackScreenProps} from '../../src/navigation/types';
 
-const LoginScreen = ({ navigation }: any) => {
+const LoginScreen = ({navigation}: RootStackScreenProps<'Login'>) => {
   const { t } = useTranslation();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -32,7 +36,7 @@ const LoginScreen = ({ navigation }: any) => {
     try {
       await signInWithEmailAndPassword(auth, trimmedEmail, trimmedPassword);
     } catch (error: any) {
-      console.error('[Login] signInWithEmailAndPassword failed', error);
+      logger.error('[Login] signInWithEmailAndPassword failed', error);
       const errorMessage =
         typeof error?.message === 'string'
           ? error.message
@@ -48,7 +52,6 @@ const LoginScreen = ({ navigation }: any) => {
   };
 
   const showDialog = () => {
-    console.log('Email al abrir diálogo:', email); // <-- LÍNEA DE DEPURACIÓN
     setResetEmail(email); // Pre-fill with the email from the input field
     setDialogVisible(true);
   };
@@ -96,7 +99,7 @@ const LoginScreen = ({ navigation }: any) => {
         throw new Error('URL not supported');
       }
     } catch (error) {
-      console.error('[Legal] Failed to open legal URL', error);
+      logger.error('[Legal] Failed to open legal URL', error);
       Toast.show({
         type: 'error',
         text1: t('alerts.error'),
@@ -114,7 +117,7 @@ const LoginScreen = ({ navigation }: any) => {
       <TextInput
         style={styles.input}
         placeholder={t('login.emailPlaceholder')}
-        placeholderTextColor="#888"
+        placeholderTextColor={palette.textSecondary}
         value={email}
         onChangeText={setEmail}
         autoCapitalize="none"
@@ -124,7 +127,7 @@ const LoginScreen = ({ navigation }: any) => {
       <TextInput
         style={styles.input}
         placeholder={t('login.passwordPlaceholder')}
-        placeholderTextColor="#888"
+        placeholderTextColor={palette.textSecondary}
         value={password}
         onChangeText={setPassword}
         secureTextEntry
@@ -133,10 +136,13 @@ const LoginScreen = ({ navigation }: any) => {
       <TouchableOpacity onPress={showDialog}>
         <Text style={styles.forgotPasswordText}>{t('login.forgotPassword')}</Text>
       </TouchableOpacity>
-      <Button title={t('login.loginButton')} onPress={handleLogin} disabled={loading} />
+      <CustomButton title={t('login.loginButton')} onPress={handleLogin} disabled={loading} />
       <View style={styles.buttonSpacer} />
-      <Button
+      <CustomButton
         title={t('login.signupButton')}
+        variant="outline"
+        color={palette.textPrimary}
+        textColor={palette.textPrimary}
         onPress={() => navigation.navigate('Signup')}
         disabled={loading}
       />
@@ -180,7 +186,7 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     justifyContent: 'center',
     padding: 16,
-    backgroundColor: '#fff',
+    backgroundColor: palette.backgroundLight,
   },
   logo: {
     width: 150,
@@ -194,21 +200,24 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     textAlign: 'center',
     marginBottom: 24,
+    color: palette.textPrimary,
   },
   input: {
-    height: 40,
-    borderColor: 'gray',
+    height: 44,
+    borderColor: palette.borderLight,
     borderWidth: 1,
-    borderRadius: 5,
+    borderRadius: radii.lg,
     marginBottom: 12,
-    paddingHorizontal: 8,
-    color: '#000', // Asegurar que el texto sea visible
+    paddingHorizontal: 12,
+    color: palette.textPrimary, // Asegurar que el texto sea visible
+    backgroundColor: palette.backgroundCard,
+    ...shadows.subtle,
   },
   buttonSpacer: {
     marginTop: 12,
   },
   forgotPasswordText: {
-    color: '#007BFF',
+    color: palette.highlight,
     textAlign: 'right',
     marginBottom: 12,
   },
@@ -218,18 +227,18 @@ const styles = StyleSheet.create({
   },
   legalText: {
     fontSize: 12,
-    color: 'gray',
+    color: palette.textSecondary,
     textAlign: 'center',
   },
   linkText: {
-    color: '#007BFF',
+    color: palette.highlight,
     textDecorationLine: 'underline',
   },
   dialogDescription: {
-    color: '#333',
+    color: palette.textSecondary,
   },
   dialogInput: {
-    color: '#000',
+    color: palette.textPrimary,
   },
 });
 

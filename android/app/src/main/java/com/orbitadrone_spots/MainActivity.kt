@@ -1,9 +1,12 @@
 package com.orbitadrone_spots
 
 import android.os.Bundle
+import androidx.activity.enableEdgeToEdge
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
-import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint
+import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.fabricEnabled
 import com.facebook.react.defaults.DefaultReactActivityDelegate
 
 class MainActivity : ReactActivity() {
@@ -14,6 +17,13 @@ class MainActivity : ReactActivity() {
    */
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(null)
+
+    // Modern edge-to-edge setup for Android 15+: prefer new API over deprecated flags
+    enableEdgeToEdge()
+    WindowCompat.setDecorFitsSystemWindows(window, false)
+    WindowInsetsControllerCompat(window, window.decorView).apply {
+      systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    }
   }
 
   /**
@@ -23,15 +33,9 @@ class MainActivity : ReactActivity() {
   override fun getMainComponentName(): String = "orbitadrone_spots"
 
   /**
-   * Returns the instance of the [ReactActivityDelegate]. We use a util class [DefaultReactActivityDelegate]
-   * which allows you to easily enable Fabric and Concurrent React (aka React 18) with two boolean flags.
+   * Returns the instance of the [ReactActivityDelegate]. We use [DefaultReactActivityDelegate]
+   * which allows you to enable New Architecture with a single boolean flag [fabricEnabled].
    */
-  override fun createReactActivityDelegate(): ReactActivityDelegate {
-    return DefaultReactActivityDelegate(
-      this,
-      mainComponentName,
-      // If you opted-in for the New Architecture, we enable the Fabric Renderer.
-      DefaultNewArchitectureEntryPoint.fabricEnabled
-    )
-  }
+  override fun createReactActivityDelegate(): ReactActivityDelegate =
+      DefaultReactActivityDelegate(this, mainComponentName, fabricEnabled)
 }

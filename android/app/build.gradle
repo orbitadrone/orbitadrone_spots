@@ -6,7 +6,7 @@ apply plugin: "com.facebook.react"
 apply plugin: "com.google.gms.google-services"
 apply plugin: "com.google.firebase.crashlytics"
 
-// Force React Native Gradle tasks to respect NODE_BINARY (use Node 20+ for RN 0.83)
+// Force React Native Gradle tasks to respect NODE_BINARY (standardized on Node 22 LTS).
 def nodeExecutable = (System.getenv("NODE_BINARY") ?: "node").trim()
 logger.lifecycle("[Orbitadrone] React Native will use Node binary: ${nodeExecutable}")
 
@@ -71,6 +71,52 @@ def resolveSigningProperty(String propName, boolean required = true) {
   return value
 }
 
+def isTruthyValue(Object value) {
+  if (value == null) {
+    return false
+  }
+
+  def normalized = value.toString().trim().toLowerCase()
+  return ["1", "true", "yes", "on"].contains(normalized)
+}
+
+def isPathInsideProjectTree(Object pathValue) {
+  if (!pathValue) {
+    return false
+  }
+
+  def candidateFile = file(pathValue)
+  def candidatePath = candidateFile.canonicalFile.toPath()
+  def projectPath = rootProject.projectDir.canonicalFile.toPath()
+  return candidatePath.startsWith(projectPath)
+}
+
+def shouldEnforceSecureReleaseSigning() {
+  return isReleaseTaskRequested() && (
+    isTruthyValue(project.findProperty("ORBITA_ENFORCE_SECURE_KEYSTORE")) ||
+    isTruthyValue(System.getenv("ORBITA_ENFORCE_SECURE_KEYSTORE")) ||
+    isTruthyValue(System.getenv("CI"))
+  )
+}
+
+def validateReleaseSigningConfig(Object keystorePath) {
+  if (!keystorePath) {
+    return
+  }
+
+  if (keystoreProperties && !keystoreProperties.isEmpty()) {
+    logger.warn("[Orbitadrone] keystore.properties detected. Keep it local-only and prefer env vars/CI secrets for shared or automated builds.")
+  }
+
+  if (isPathInsideProjectTree(keystorePath)) {
+    def message = "[Orbitadrone] Release keystore resolves inside the project tree (${file(keystorePath)}). Move it outside the repo and provide ORBITA_KEYSTORE_* via env vars or secure local properties."
+    if (shouldEnforceSecureReleaseSigning()) {
+      throw new GradleException("${message} Release tasks run with secure signing enforcement enabled.")
+    }
+    logger.warn(message)
+  }
+}
+
 def isReleaseTaskRequested() {
   def requestedTasks = gradle.startParameter.taskNames
   return requestedTasks.any { taskName ->
@@ -88,8 +134,8 @@ android {
     applicationId "com.orbitadrone_spots"
     minSdkVersion = rootProject.ext.minSdkVersion
     targetSdkVersion = rootProject.ext.targetSdkVersion
-    versionCode = 115
-    versionName = "1.1.5"
+    versionCode = 130
+    versionName = "1.1.20"
     ndk {
       // Export full native debug symbols for Play Console uploads
       debugSymbolLevel = 'FULL'
@@ -139,6 +185,7 @@ android {
       def requireSigning = isReleaseTaskRequested()
       def keystorePath = resolveSigningProperty("ORBITA_KEYSTORE_FILE", requireSigning)
       if (keystorePath) {
+        validateReleaseSigningConfig(keystorePath)
         storeFile = file(keystorePath)
         storePassword = resolveSigningProperty("ORBITA_KEYSTORE_PASSWORD", requireSigning) ?: ""
         keyAlias = resolveSigningProperty("ORBITA_KEY_ALIAS", requireSigning) ?: ""

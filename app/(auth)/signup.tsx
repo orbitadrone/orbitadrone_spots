@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, Button, StyleSheet, ScrollView, TouchableOpacity, Image, ActivityIndicator, ImageBackground, Linking, Alert } from 'react-native';
+import { View, Text, TextInput, StyleSheet, ScrollView, TouchableOpacity, Image, ActivityIndicator, ImageBackground, Linking, Alert } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { authInstance as auth } from '../../src/firebaseConfig';
 import { createUserWithEmailAndPassword } from '@react-native-firebase/auth';
@@ -12,10 +12,14 @@ import { useTranslation } from 'react-i18next';
 import Toast from 'react-native-toast-message';
 
 import { flightStylesOptions } from '../../src/constants/flightStyles';
+import CustomButton from '../components/CustomButton';
+import { palette, radii, shadows } from '../../src/constants/theme';
+import logger from '../../src/utils/logger';
+import type {RootStackNavigationProp} from '../../src/navigation/types';
 
 const SignupScreen = () => {
   const { t } = useTranslation();
-  const navigation = useNavigation();
+  const navigation = useNavigation<RootStackNavigationProp<'Signup'>>();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -76,7 +80,11 @@ const SignupScreen = () => {
       });
 
     } catch (error: any) {
-      Toast.show({ type: 'error', text1: t('alerts.signupError') });
+      Toast.show({
+        type: 'error',
+        text1: t('alerts.signupError'),
+        text2: typeof error?.message === 'string' ? error.message : undefined,
+      });
     } finally {
       setLoading(false);
     }
@@ -153,7 +161,7 @@ const SignupScreen = () => {
         throw new Error('URL not supported');
       }
     } catch (error) {
-      console.error('[Legal] Failed to open legal URL', error);
+      logger.error('[Legal] Failed to open legal URL', error);
       Toast.show({ type: 'error', text1: t('alerts.error') });
     }
   };
@@ -169,12 +177,12 @@ const SignupScreen = () => {
   return (
     <ScrollView style={styles.container}>
       <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-        <Icon name="arrow-left" size={24} color="#000" />
+        <Icon name="close" size={22} color={palette.textPrimary} />
       </TouchableOpacity>
       <Text style={styles.title}>{t('signup.title')}</Text>
 
       <View style={styles.profileHeader}>
-        <TouchableOpacity style={{ width: '100%' }} onPress={() => handleChooseImage('background')}>
+        <TouchableOpacity style={styles.fullWidth} onPress={() => handleChooseImage('background')}>
           <ImageBackground style={styles.backgroundImage} source={backgroundPictureUri ? { uri: backgroundPictureUri } : null} resizeMode="cover">
             {!backgroundPictureUri && <Text style={styles.placeholderText}>{t('signup.addBackgroundPhoto')}</Text>}
           </ImageBackground>
@@ -189,19 +197,19 @@ const SignupScreen = () => {
       <View style={styles.formContainer}>
         <Text style={styles.sectionTitle}>{t('signup.accessInfo')}</Text>
         <Text style={styles.label}>{t('signup.emailLabel')}</Text>
-        <TextInput style={styles.input} placeholder={t('signup.emailPlaceholder')} value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
+        <TextInput style={styles.input} placeholder={t('signup.emailPlaceholder')} value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" placeholderTextColor={palette.textSecondary} />
         <Text style={styles.label}>{t('signup.displayNameLabel')}</Text>
-        <TextInput style={styles.input} placeholder={t('signup.displayNamePlaceholder')} value={displayName} onChangeText={setDisplayName} />
+        <TextInput style={styles.input} placeholder={t('signup.displayNamePlaceholder')} value={displayName} onChangeText={setDisplayName} placeholderTextColor={palette.textSecondary} />
         <Text style={styles.label}>{t('signup.passwordLabel')}</Text>
-        <TextInput style={styles.input} placeholder={t('signup.passwordPlaceholder')} value={password} onChangeText={setPassword} secureTextEntry />
+        <TextInput style={styles.input} placeholder={t('signup.passwordPlaceholder')} value={password} onChangeText={setPassword} secureTextEntry placeholderTextColor={palette.textSecondary} />
         <Text style={styles.label}>{t('signup.confirmPasswordLabel')}</Text>
-        <TextInput style={styles.input} placeholder={t('signup.confirmPasswordPlaceholder')} value={confirmPassword} onChangeText={setConfirmPassword} secureTextEntry />
+        <TextInput style={styles.input} placeholder={t('signup.confirmPasswordPlaceholder')} value={confirmPassword} onChangeText={setConfirmPassword} secureTextEntry placeholderTextColor={palette.textSecondary} />
 
         <Text style={styles.sectionTitle}>{t('signup.pilotInfo')}</Text>
         <Text style={styles.label}>{t('signup.bioLabel')}</Text>
-        <TextInput style={styles.input} placeholder={t('signup.bioPlaceholder')} value={bio} onChangeText={setBio} maxLength={100} multiline />
+        <TextInput style={styles.input} placeholder={t('signup.bioPlaceholder')} value={bio} onChangeText={setBio} maxLength={100} multiline placeholderTextColor={palette.textSecondary} />
         <Text style={styles.label}>{t('signup.locationLabel')}</Text>
-        <TextInput style={styles.input} placeholder={t('signup.locationPlaceholder')} value={cityRegion} onChangeText={setCityRegion} />
+        <TextInput style={styles.input} placeholder={t('signup.locationPlaceholder')} value={cityRegion} onChangeText={setCityRegion} placeholderTextColor={palette.textSecondary} />
 
         <View style={styles.radioContainer}>
           {[
@@ -253,7 +261,11 @@ const SignupScreen = () => {
             {legalSuffix}
           </Text>
         </View>
-        {loading ? <ActivityIndicator size="large" color="#0000ff" /> : <Button title={t('signup.signupButton')} onPress={handleSignUp} />}
+        {loading ? (
+          <ActivityIndicator size="large" color={palette.highlight} />
+        ) : (
+          <CustomButton title={t('signup.signupButton')} onPress={handleSignUp} />
+        )}
       </View>
 
       <LanguageSelector />
@@ -262,34 +274,45 @@ const SignupScreen = () => {
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
-  backButton: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 10, alignSelf: 'flex-start' },
-  title: { fontSize: 24, fontWeight: 'bold', marginBottom: 20, textAlign: 'center', paddingHorizontal: 20, paddingTop: 20 },
+  container: { flex: 1, backgroundColor: palette.backgroundLight },
+  fullWidth: { width: '100%' },
+  backButton: {
+    alignSelf: 'flex-end',
+    marginRight: 16,
+    marginTop: 16,
+    backgroundColor: palette.backgroundCard,
+    padding: 8,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: palette.borderLight,
+    ...shadows.subtle,
+  },
+  title: { fontSize: 24, fontWeight: 'bold', marginBottom: 20, textAlign: 'center', paddingHorizontal: 20, paddingTop: 20, color: palette.textPrimary },
   profileHeader: { marginBottom: 60, width: '100%' },
-  backgroundImage: { width: '100%', height: 150, backgroundColor: '#f0f0f0', justifyContent: 'center', alignItems: 'center' },
-  placeholderText: { color: '#888', flex: 1, textAlign: 'center' },
+  backgroundImage: { width: '100%', height: 150, backgroundColor: palette.backgroundMuted, justifyContent: 'center', alignItems: 'center' },
+  placeholderText: { color: palette.textSecondary, flex: 1, textAlign: 'center' },
   profilePictureWrapper: { position: 'absolute', top: 100, alignSelf: 'center' },
-  profilePictureTouchable: { width: 100, height: 100, borderRadius: 50, backgroundColor: '#ccc', justifyContent: 'center', alignItems: 'center', borderWidth: 3, borderColor: '#fff' },
+  profilePictureTouchable: { width: 100, height: 100, borderRadius: 50, backgroundColor: palette.borderLight, justifyContent: 'center', alignItems: 'center', borderWidth: 3, borderColor: palette.backgroundCard },
   profilePictureImage: { width: '100%', height: '100%', borderRadius: 50 },
   profilePicturePlaceholder: { justifyContent: 'center', alignItems: 'center' },
   formContainer: { paddingHorizontal: 20 },
-  sectionTitle: { fontSize: 20, fontWeight: 'bold', marginTop: 20, marginBottom: 10, borderBottomWidth: 1, borderBottomColor: '#eee', paddingBottom: 5 },
-  label: { fontSize: 16, fontWeight: 'bold', marginTop: 10, marginBottom: 5 },
-  input: { height: 40, borderColor: 'gray', borderWidth: 1, borderRadius: 5, marginBottom: 12, paddingHorizontal: 8, color: '#000' },
-  socialInputContainer: { flexDirection: 'row', alignItems: 'center', borderColor: 'gray', borderWidth: 1, borderRadius: 5, marginBottom: 12, paddingHorizontal: 8 },
+  sectionTitle: { fontSize: 20, fontWeight: 'bold', marginTop: 20, marginBottom: 10, borderBottomWidth: 1, borderBottomColor: palette.borderLight, paddingBottom: 5, color: palette.textPrimary },
+  label: { fontSize: 16, fontWeight: 'bold', marginTop: 10, marginBottom: 5, color: palette.textPrimary },
+  input: { height: 44, borderColor: palette.borderLight, borderWidth: 1, borderRadius: radii.lg, marginBottom: 12, paddingHorizontal: 12, color: palette.textPrimary, backgroundColor: palette.backgroundCard, ...shadows.subtle },
+  socialInputContainer: { flexDirection: 'row', alignItems: 'center', borderColor: palette.borderLight, borderWidth: 1, borderRadius: radii.lg, marginBottom: 12, paddingHorizontal: 12, backgroundColor: palette.backgroundCard, ...shadows.subtle },
   socialIcon: { marginRight: 10 },
-  socialInput: { flex: 1, height: 40, color: '#000' },
+  socialInput: { flex: 1, height: 44, color: palette.textPrimary },
   radioContainer: { flexDirection: 'row', justifyContent: 'space-between', flexWrap: 'wrap', marginBottom: 20 },
   radioButton: { flexDirection: 'row', alignItems: 'center', width: '48%', marginBottom: 8 },
-  radioLabel: { fontSize: 16, flex: 1, flexWrap: 'wrap' },
+  radioLabel: { fontSize: 16, flex: 1, flexWrap: 'wrap', color: palette.textPrimary },
   stylesContainer: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginBottom: 10 },
   checkboxContainer: { flexDirection: 'row', alignItems: 'center', width: '48%', marginBottom: 10 },
-  checkbox: { height: 20, width: 20, borderRadius: 3, borderWidth: 1, borderColor: '#000', alignItems: 'center', justifyContent: 'center', marginRight: 10 },
-  checkboxChecked: { width: 12, height: 12, backgroundColor: '#000' },
-  checkboxLabel: { fontSize: 16, flex: 1 },
+  checkbox: { height: 20, width: 20, borderRadius: 3, borderWidth: 1, borderColor: palette.borderLight, alignItems: 'center', justifyContent: 'center', marginRight: 10 },
+  checkboxChecked: { width: 12, height: 12, backgroundColor: palette.highlight },
+  checkboxLabel: { fontSize: 16, flex: 1, color: palette.textPrimary },
   legalContainer: { marginVertical: 15 },
-  legalText: { textAlign: 'center', color: 'gray', fontSize: 12 },
-  linkText: { color: '#007BFF', textDecorationLine: 'underline' },
+  legalText: { textAlign: 'center', color: palette.textSecondary, fontSize: 12 },
+  linkText: { color: palette.highlight, textDecorationLine: 'underline' },
 });
 
 export default SignupScreen;

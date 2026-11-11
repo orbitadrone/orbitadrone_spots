@@ -2,6 +2,7 @@ import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
 import MapScreen from '../screens/MapScreen';
+import FeedScreen from '../screens/FeedScreen';
 import MySpotsScreen from '../screens/MySpotsScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import UserProfileScreen from '../screens/UserProfileScreen';
@@ -9,12 +10,20 @@ import SpotDetailScreen from '../screens/SpotDetailScreen';
 import AddSpotScreen from '../screens/AddSpotScreen';
 import AddReviewScreen from '../screens/AddReviewScreen'; // Importar AddReviewScreen
 import SpotVersionsScreen from '../screens/SpotVersionsScreen'; // Importar SpotVersionsScreen
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import AdminPanelScreen from '../screens/AdminPanelScreen';
+import CreateDronePostScreen from '../screens/CreateDronePostScreen';
+import CreateEventScreen from '../screens/CreateEventScreen';
+import EventDetailScreen from '../screens/EventDetailScreen';
 
 import { useTranslation } from 'react-i18next';
+import AppTabBar from '../components/navigation/AppTabBar';
+import type {AppStackParamList, MainTabParamList} from '../../src/navigation/types';
+import type {BottomTabBarProps} from '@react-navigation/bottom-tabs';
 
-const Tab = createBottomTabNavigator();
-const Stack = createStackNavigator();
+const Tab = createBottomTabNavigator<MainTabParamList>();
+const Stack = createStackNavigator<AppStackParamList>();
+
+const renderAppTabBar = (props: BottomTabBarProps) => <AppTabBar {...props} />;
 
 // Navegador de Pestañas principal
 function MainTabNavigator() {
@@ -22,26 +31,18 @@ function MainTabNavigator() {
   return (
     <Tab.Navigator
       id={undefined}
-      screenOptions={({ route }) => ({
-        tabBarIcon: ({ focused, color, size }) => {
-          let iconName;
-          if (route.name === 'Map') {
-            iconName = focused ? 'map' : 'map-outline';
-          } else if (route.name === 'MySpots') {
-            iconName = focused ? 'star' : 'star-outline';
-          } else if (route.name === 'Profile') {
-            iconName = focused ? 'account-circle' : 'account-circle-outline';
-          }
-          return <Icon name={iconName as string} size={size} color={color} />;
-        },
-        tabBarActiveTintColor: 'tomato',
-        tabBarInactiveTintColor: 'gray',
+      tabBar={renderAppTabBar}
+      screenOptions={{
         headerShown: false,
-        tabBarLabelStyle: {
-          fontSize: 10,
-        },
-      })}
+      }}
     >
+      <Tab.Screen
+        name="Feed"
+        component={FeedScreen}
+        options={{
+          tabBarLabel: t('navigation.feed'),
+        }}
+      />
       <Tab.Screen
         name="Map"
         component={MapScreen}
@@ -77,6 +78,10 @@ function AppNavigator() {
       <Stack.Screen name="AddReview" component={AddReviewScreen} />
       <Stack.Screen name="SpotVersions" component={SpotVersionsScreen} />
       <Stack.Screen name="UserProfile" component={UserProfileScreen} />
+      <Stack.Screen name="CreateDronePost" component={CreateDronePostScreen} />
+      <Stack.Screen name="CreateEvent" component={CreateEventScreen} />
+      <Stack.Screen name="EventDetail" component={EventDetailScreen} />
+      <Stack.Screen name="AdminPanel" component={AdminPanelScreen} />
     </Stack.Navigator>
   );
 }

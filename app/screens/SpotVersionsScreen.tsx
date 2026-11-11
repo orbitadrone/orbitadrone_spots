@@ -1,17 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Image } from 'react-native';
-import { useRoute, useNavigation } from '@react-navigation/native';
 import { Spot, UserProfile, getUserProfile } from '../../src/services/firestoreService';
 import { Rating } from 'react-native-ratings';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTranslation } from 'react-i18next';
+import type {AppStackScreenProps} from '../../src/navigation/types';
 
 type SpotWithCreator = Spot & { creator?: UserProfile | null };
 
-const SpotVersionsScreen = () => {
+const SpotVersionsScreen = ({route, navigation}: AppStackScreenProps<'SpotVersions'>) => {
   const { t } = useTranslation();
-  const route = useRoute<any>();
-  const navigation = useNavigation<any>();
   const { spots } = route.params;
 
   const [spotsWithCreators, setSpotsWithCreators] = useState<SpotWithCreator[]>([]);

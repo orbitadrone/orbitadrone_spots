@@ -1,5 +1,6 @@
 import { firebaseStorage } from '../firebaseConfig';
 import { retryAsync, isRetriableNetworkError } from '../utils/retry';
+import logger from '../utils/logger';
 
 const isRetriableStorageError = (error: unknown) => {
   const code =
@@ -26,14 +27,14 @@ const uploadFile = async (uri: string, path: string, metadata?: Record<string, u
       await reference.putFile(uri, metadata);
       return reference.getDownloadURL();
     } catch (error) {
-      console.warn('[Storage] upload failed', { path, error });
+      logger.warn('[Storage] upload failed', { path, error });
       throw error;
     }
   }, {
     attempts: 3,
     shouldRetry: isRetriableStorageError,
     onRetry: ({ attempt, delayMs, error }) => {
-      console.warn(
+      logger.warn(
         `[Storage] retrying upload for ${path} (attempt ${attempt}) in ${delayMs}ms`,
         error,
       );

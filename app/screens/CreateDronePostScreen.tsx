@@ -19,185 +19,36 @@ import {useTranslation} from 'react-i18next';
 import {useFocusEffect} from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Video from 'react-native-video';
-import RNFS from 'react-native-fs';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 
-import {uploadFile} from '../../src/services/storageService';
-import {uploadVideoToBunny} from '../../src/services/bunnyStreamService';
-import {createDronePost} from '../../src/services/socialService';
 import {palette, radii, shadows} from '../../src/constants/theme';
+import logger from '../../src/utils/logger';
 import {useAuthContext} from '../context/AuthContext';
+import {
+  bytesToMb,
+  DRAFT_STORAGE_KEY,
+  DraftPayload,
+  LocalImageAsset,
+  MAX_IMAGES,
+  MAX_VIDEO_DURATION_SECONDS,
+  MAX_VIDEO_SIZE_MB,
+  PUBLISHED_STAGE_DELAY_MS,
+  doesFileUriExist,
+  normalizeDraftImages,
+  safeUnlinkManagedMediaUri,
+  sleep,
+} from '../features/createDronePost/createDronePostShared';
+import {
+  CreateDronePostStep,
+  classifyCreateDronePostError,
+  prepareSelectedVideoAsset,
+  publishCreateDronePost,
+} from '../features/createDronePost/createDronePostPublishing';
+import type {AppStackScreenProps} from '../../src/navigation/types';
 
-const MAX_VIDEO_DURATION_SECONDS = 180;
-const MAX_VIDEO_SIZE_MB = 200;
-const MAX_IMAGES = 5;
-const DRAFT_STORAGE_KEY = 'create_drone_post_draft_v1';
-const IMAGE_UPLOAD_TIMEOUT_MS = 120000;
-const MEDIA_PREPARE_TIMEOUT_MS = 15000;
-const CREATE_POST_TIMEOUT_MS = 20000;
-const PUBLISHED_STAGE_DELAY_MS = 300;
-
-type LocalImageAsset = {
-  uri: string;
-  fileName?: string | null;
-  type?: string | null;
-};
-
-type DraftPayload = {
-  text: string;
-  images: LocalImageAsset[];
-  videoUri: string | null;
-  videoName: string | null;
-  videoType: string | null;
-  updatedAt: number;
-};
-
-const bytesToMb = (bytes?: number) => {
-  if (!bytes || bytes <= 0) {
-    return 0;
-  }
-  return bytes / (1024 * 1024);
-};
-
-const normalizeErrorMessage = (error: unknown) => {
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
-  if (typeof error === 'string') {
-    return error;
-  }
-  return '';
-};
-
-const sleep = (ms: number) =>
-  new Promise<void>(resolve => {
-    setTimeout(resolve, ms);
-  });
-
-const withTimeout = async <T,>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  label: string,
-): Promise<T> => {
-  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_, reject) => {
-        timeoutHandle = setTimeout(() => {
-          reject(new Error(`Timeout: ${label}`));
-        }, timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
-  }
-};
-
-const ensureFileLikeUri = (input: unknown): string | null => {
-  if (typeof input !== 'string' || !input.trim()) {
-    return null;
-  }
-  const normalized = input.trim();
-  if (normalized.startsWith('file://') || normalized.startsWith('content://')) {
-    return normalized;
-  }
-  if (normalized.startsWith('/')) {
-    return `file://${normalized}`;
-  }
-  return `file:///${normalized}`;
-};
-
-const getMediaExtension = (
-  fileName: string | null | undefined,
-  mimeType: string | null | undefined,
-  fallback: string,
-) => {
-  if (fileName) {
-    const match = /\.([a-z0-9]+)$/i.exec(fileName);
-    if (match?.[1]) {
-      return match[1].toLowerCase();
-    }
-  }
-  if (mimeType) {
-    const parts = mimeType.toLowerCase().split('/');
-    if (parts.length === 2 && parts[1]) {
-      return parts[1];
-    }
-  }
-  return fallback;
-};
-
-const normalizeDraftImages = (value: unknown): LocalImageAsset[] => {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.reduce<LocalImageAsset[]>((acc, item) => {
-    if (typeof item === 'string' && item.trim()) {
-      acc.push({uri: item.trim()});
-      return acc;
-    }
-    if (item && typeof item === 'object' && typeof (item as any).uri === 'string') {
-      acc.push({
-        uri: (item as any).uri,
-        fileName:
-          typeof (item as any).fileName === 'string'
-            ? (item as any).fileName
-            : null,
-        type: typeof (item as any).type === 'string' ? (item as any).type : null,
-      });
-    }
-    return acc;
-  }, []);
-};
-
-const prepareUploadableUri = async ({
-  uri,
-  // Reserved for future normalization paths.
-  fileName: _fileName,
-  mimeType: _mimeType,
-  fallbackExtension: _fallbackExtension,
-}: {
-  uri: string;
-  fileName?: string | null;
-  mimeType?: string | null;
-  fallbackExtension?: string;
-}): Promise<{uploadUri: string; tempPath: string | null}> => {
-  const normalizedUri = ensureFileLikeUri(uri);
-  if (!normalizedUri) {
-    throw new Error('Invalid media URI');
-  }
-  // Keep content:// URIs as-is to avoid expensive pre-copy on large videos.
-  // RN Firebase Storage and multipart uploads can consume them on modern Android.
-  if (normalizedUri.startsWith('content://')) {
-    return {uploadUri: normalizedUri, tempPath: null};
-  }
-
-  return {uploadUri: normalizedUri, tempPath: null};
-};
-
-const cleanupTempFiles = async (tempPaths: string[]) => {
-  if (!tempPaths.length) {
-    return;
-  }
-
-  await Promise.all(
-    tempPaths.map(async tempPath => {
-      try {
-        const exists = await RNFS.exists(tempPath);
-        if (exists) {
-          await RNFS.unlink(tempPath);
-        }
-      } catch (cleanupError) {
-        console.warn('[CreateDronePost] temp cleanup failed', cleanupError);
-      }
-    }),
-  );
-};
-
-export default function CreateDronePostScreen({navigation}: {navigation: any}) {
+export default function CreateDronePostScreen({
+  navigation,
+}: AppStackScreenProps<'CreateDronePost'>) {
   const {t} = useTranslation();
   const {user} = useAuthContext();
   const insets = useSafeAreaInsets();
@@ -217,11 +68,13 @@ export default function CreateDronePostScreen({navigation}: {navigation: any}) {
   const [stage, setStage] = useState<'idle' | 'uploading' | 'processing' | 'published'>('idle');
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isSubmitting, setSubmitting] = useState(false);
+  const [isPreparingVideo, setPreparingVideo] = useState(false);
   const [lastErrorMessage, setLastErrorMessage] = useState<string | null>(null);
   const [draftLoaded, setDraftLoaded] = useState(false);
 
   const publishAttemptRef = useRef(0);
   const bypassBeforeRemoveRef = useRef(false);
+  const isMountedRef = useRef(true);
 
   const canSubmit = useMemo(
     () => Boolean(text.trim() || images.length || videoUri),
@@ -229,7 +82,15 @@ export default function CreateDronePostScreen({navigation}: {navigation: any}) {
   );
   const hasDraftContent = canSubmit;
 
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
   const resetLocalForm = useCallback(() => {
+    const currentVideoUri = videoUri;
     setText('');
     setImages([]);
     setVideoUri(null);
@@ -237,14 +98,16 @@ export default function CreateDronePostScreen({navigation}: {navigation: any}) {
     setVideoType(null);
     setStage('idle');
     setUploadProgress(0);
+    setPreparingVideo(false);
     setLastErrorMessage(null);
-  }, []);
+    safeUnlinkManagedMediaUri(currentVideoUri);
+  }, [videoUri]);
 
   const clearDraftStorage = useCallback(async () => {
     try {
       await AsyncStorage.removeItem(DRAFT_STORAGE_KEY);
     } catch (error) {
-      console.warn('[CreateDronePost] clear draft failed', error);
+      logger.warn('[CreateDronePost] clear draft failed', error);
     }
   }, []);
 
@@ -267,11 +130,35 @@ export default function CreateDronePostScreen({navigation}: {navigation: any}) {
     navigation.goBack();
   }, [navigation]);
 
+  const continueUploadInBackground = useCallback(() => {
+    if (!isSubmitting) {
+      safeGoBack();
+      return;
+    }
+    bypassBeforeRemoveRef.current = true;
+    navigation.goBack();
+  }, [isSubmitting, navigation, safeGoBack]);
+
   const confirmExit = useCallback(() => {
+    if (isPreparingVideo) {
+      Alert.alert(t('alerts.attention'), t('feed.videoPreparingMessage'));
+      return;
+    }
+
     if (isSubmitting) {
       Alert.alert(
         t('feed.uploadingInProgressTitle'),
-        t('feed.uploadingInProgressMessage'),
+        t('feed.backgroundUploadMessage'),
+        [
+          {
+            text: t('feed.stayInEditor'),
+            style: 'cancel',
+          },
+          {
+            text: t('feed.continueInBackground'),
+            onPress: continueUploadInBackground,
+          },
+        ],
       );
       return;
     }
@@ -303,9 +190,11 @@ export default function CreateDronePostScreen({navigation}: {navigation: any}) {
   }, [
     clearDraftStorage,
     hasDraftContent,
+    isPreparingVideo,
     isSubmitting,
     resetLocalForm,
     safeGoBack,
+    continueUploadInBackground,
     t,
   ]);
 
@@ -353,16 +242,29 @@ export default function CreateDronePostScreen({navigation}: {navigation: any}) {
         setText(typeof draft.text === 'string' ? draft.text : '');
         const restoredImages = normalizeDraftImages(draft.images);
         setImages(restoredImages);
-        setVideoUri(typeof draft.videoUri === 'string' ? draft.videoUri : null);
-        setVideoName(typeof draft.videoName === 'string' ? draft.videoName : null);
-        setVideoType(typeof draft.videoType === 'string' ? draft.videoType : null);
-        console.log('[CreateDronePost] draft restored', {
+        const restoredVideoUri = typeof draft.videoUri === 'string' ? draft.videoUri : null;
+        let safeVideoUri = restoredVideoUri;
+        if (restoredVideoUri && restoredVideoUri.startsWith('file://')) {
+          const exists = await doesFileUriExist(restoredVideoUri);
+          if (!exists) {
+            logger.warn('[CreateDronePost] restored video file missing, clearing draft video');
+            safeVideoUri = null;
+          }
+        }
+        setVideoUri(safeVideoUri);
+        setVideoName(
+          safeVideoUri && typeof draft.videoName === 'string' ? draft.videoName : null,
+        );
+        setVideoType(
+          safeVideoUri && typeof draft.videoType === 'string' ? draft.videoType : null,
+        );
+        logger.log('[CreateDronePost] draft restored', {
           imageCount: restoredImages.length,
-          hasVideo: Boolean(draft.videoUri),
+          hasVideo: Boolean(safeVideoUri),
           textLength: typeof draft.text === 'string' ? draft.text.length : 0,
         });
       } catch (error) {
-        console.warn('[CreateDronePost] restore draft failed', error);
+        logger.warn('[CreateDronePost] restore draft failed', error);
       } finally {
         if (!cancelled) {
           setDraftLoaded(true);
@@ -377,7 +279,7 @@ export default function CreateDronePostScreen({navigation}: {navigation: any}) {
   }, []);
 
   useEffect(() => {
-    if (!draftLoaded || isSubmitting) {
+    if (!draftLoaded || isSubmitting || isPreparingVideo) {
       return;
     }
 
@@ -397,7 +299,7 @@ export default function CreateDronePostScreen({navigation}: {navigation: any}) {
         };
         await AsyncStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(payload));
       } catch (error) {
-        console.warn('[CreateDronePost] persist draft failed', error);
+        logger.warn('[CreateDronePost] persist draft failed', error);
       }
     };
 
@@ -406,6 +308,7 @@ export default function CreateDronePostScreen({navigation}: {navigation: any}) {
     draftLoaded,
     hasDraftContent,
     images,
+    isPreparingVideo,
     isSubmitting,
     text,
     videoName,
@@ -413,8 +316,16 @@ export default function CreateDronePostScreen({navigation}: {navigation: any}) {
     videoUri,
   ]);
 
+  const clearSelectedVideo = useCallback(() => {
+    const currentVideoUri = videoUri;
+    setVideoUri(null);
+    setVideoName(null);
+    setVideoType(null);
+    safeUnlinkManagedMediaUri(currentVideoUri);
+  }, [videoUri]);
+
   const pickImages = async () => {
-    if (isSubmitting) {
+    if (isSubmitting || isPreparingVideo) {
       return;
     }
     const remaining = Math.max(0, MAX_IMAGES - images.length);
@@ -452,7 +363,7 @@ export default function CreateDronePostScreen({navigation}: {navigation: any}) {
       if (!nextImages.length) {
         return;
       }
-      console.log('[CreateDronePost] images selected', {
+      logger.log('[CreateDronePost] images selected', {
         selected: nextImages.length,
       });
       setImages(prev => [...prev, ...nextImages].slice(0, MAX_IMAGES));
@@ -460,7 +371,7 @@ export default function CreateDronePostScreen({navigation}: {navigation: any}) {
   };
 
   const pickVideo = async () => {
-    if (isSubmitting) {
+    if (isSubmitting || isPreparingVideo) {
       return;
     }
     const options: ImageLibraryOptions = {
@@ -469,7 +380,7 @@ export default function CreateDronePostScreen({navigation}: {navigation: any}) {
       videoQuality: 'medium',
     };
 
-    launchImageLibrary(options, response => {
+    launchImageLibrary(options, async response => {
       if (response.errorCode) {
         Alert.alert(t('alerts.error'), response.errorMessage || t('alerts.imagePickerError'));
         return;
@@ -506,18 +417,50 @@ export default function CreateDronePostScreen({navigation}: {navigation: any}) {
         return;
       }
 
-      setVideoUri(uri);
-      setVideoName(asset.fileName ?? 'video.mp4');
-      setVideoType(asset.type ?? 'video/mp4');
-      console.log('[CreateDronePost] video selected', {
-        duration,
-        sizeMb,
-      });
+      setPreparingVideo(true);
+      try {
+        const preparedVideo = await prepareSelectedVideoAsset({
+          asset,
+          currentVideoUri: videoUri,
+          isMounted: () => isMountedRef.current,
+        });
+        if (preparedVideo.compressionFailed) {
+          Alert.alert(t('alerts.attention'), t('alerts.videoCompressErrorMessage'));
+        }
+        setVideoUri(preparedVideo.videoUri);
+        setVideoName(preparedVideo.videoName);
+        setVideoType(preparedVideo.videoType);
+        logger.log('[CreateDronePost] video selected', {
+          duration: preparedVideo.duration,
+          sizeMb: preparedVideo.sizeMb,
+          staged: preparedVideo.videoUri.startsWith('file://'),
+          compressed: preparedVideo.compressed,
+        });
+      } catch (selectionError) {
+        if ((selectionError as Error).message === 'video_selection_cancelled') {
+          return;
+        }
+        if ((selectionError as Error).message === 'selected_video_too_large') {
+          Alert.alert(
+            t('addSpot.videoTooLargeTitle'),
+            t('addSpot.videoTooLargeMessage', {
+              maxSize: MAX_VIDEO_SIZE_MB,
+            }),
+          );
+          return;
+        }
+        logger.error('[CreateDronePost] video staging failed', selectionError);
+        Alert.alert(t('alerts.error'), t('alerts.videoCompressErrorMessage'));
+      } finally {
+        if (isMountedRef.current) {
+          setPreparingVideo(false);
+        }
+      }
     });
   };
 
   const handlePublish = async () => {
-    if (isSubmitting) {
+    if (isSubmitting || isPreparingVideo) {
       return;
     }
     if (!canSubmit) {
@@ -531,172 +474,88 @@ export default function CreateDronePostScreen({navigation}: {navigation: any}) {
 
     publishAttemptRef.current += 1;
     const attempt = publishAttemptRef.current;
-    console.log('[CreateDronePost] publish start', {
+    const selectedVideoUri = videoUri;
+    const setIfMounted = (apply: () => void) => {
+      if (isMountedRef.current) {
+        apply();
+      }
+    };
+    logger.log('[CreateDronePost] publish start', {
       attempt,
       imageCount: images.length,
       hasVideo: Boolean(videoUri),
       textLength: text.trim().length,
     });
 
-    setLastErrorMessage(null);
-    setSubmitting(true);
-    setUploadProgress(0);
-    setStage('uploading');
-
-    const tempFilesToCleanup: string[] = [];
-    let currentStep: 'upload_images' | 'upload_video' | 'create_post' = 'upload_images';
+    setIfMounted(() => {
+      setLastErrorMessage(null);
+      setSubmitting(true);
+      setUploadProgress(0);
+      setStage('uploading');
+    });
 
     try {
-      const uploadedImages: string[] = [];
-      for (let index = 0; index < images.length; index += 1) {
-        const image = images[index];
-        const prepared = await withTimeout(
-          prepareUploadableUri({
-            uri: image.uri,
-            fileName: image.fileName,
-            mimeType: image.type,
-            fallbackExtension: 'jpg',
-          }),
-          MEDIA_PREPARE_TIMEOUT_MS,
-          `prepare_image_${index + 1}`,
-        );
-        if (prepared.tempPath) {
-          tempFilesToCleanup.push(prepared.tempPath);
-        }
-        const extension = getMediaExtension(image.fileName, image.type, 'jpg');
-        const remoteUrl = await withTimeout(
-          uploadFile(
-            prepared.uploadUri,
-            `drone_posts/${Date.now()}_${attempt}_${index}.${extension}`,
-            image.type ? {contentType: image.type} : undefined,
-          ),
-          IMAGE_UPLOAD_TIMEOUT_MS,
-          `upload_image_${index + 1}`,
-        );
-        uploadedImages.push(remoteUrl);
-        console.log('[CreateDronePost] image uploaded', {
-          attempt,
-          index: index + 1,
-          total: images.length,
-        });
-        const maxImageProgress = videoUri ? 0.35 : 0.8;
-        const imageProgress = images.length
-          ? ((index + 1) / images.length) * maxImageProgress
-          : maxImageProgress;
-        setUploadProgress(imageProgress);
-      }
-
-      let uploadedVideoUrl: string | undefined;
-      if (videoUri) {
-        currentStep = 'upload_video';
-        setStage('uploading');
-        const preparedVideo = await withTimeout(
-          prepareUploadableUri({
-            uri: videoUri,
-            fileName: videoName,
-            mimeType: videoType,
-            fallbackExtension: 'mp4',
-          }),
-          MEDIA_PREPARE_TIMEOUT_MS,
-          'prepare_video',
-        );
-        if (preparedVideo.tempPath) {
-          tempFilesToCleanup.push(preparedVideo.tempPath);
-        }
-        const uploadResult = await uploadVideoToBunny({
-          uri: preparedVideo.uploadUri,
-          name: videoName ?? 'drone-post-video.mp4',
-          contentType: videoType ?? 'video/mp4',
-          title: text.trim() || videoName || 'drone-post-video',
-          fallbackStoragePrefix: 'drone_posts',
-          onProgress: payload => {
-            const ratio = payload.total > 0 ? payload.loaded / payload.total : 0;
-            const bounded = Math.max(0, Math.min(1, ratio));
-            setUploadProgress(0.35 + bounded * 0.6);
-          },
-        });
-        uploadedVideoUrl = uploadResult.playbackUrl;
-        console.log('[CreateDronePost] video uploaded', {attempt});
-      } else if (!images.length) {
-        setUploadProgress(0.8);
-      }
-
-      currentStep = 'create_post';
-      setStage('processing');
-      setUploadProgress(0.96);
-      const created = await withTimeout(
-        createDronePost({
-          text: text.trim(),
-          images: uploadedImages,
-          videoUrl: uploadedVideoUrl,
-          thumbnailUrl: uploadedImages[0] ?? undefined,
-        }),
-        CREATE_POST_TIMEOUT_MS,
-        'create_post',
-      );
-      console.log('[CreateDronePost] post created', {
+      const result = await publishCreateDronePost({
         attempt,
-        postId: created.id,
+        images,
+        text,
+        videoName,
+        videoType,
+        videoUri,
+        isMounted: () => isMountedRef.current,
+        onProgressChange: progress => {
+          setIfMounted(() => {
+            setUploadProgress(progress);
+          });
+        },
+        onStageChange: nextStage => {
+          setIfMounted(() => {
+            setStage(nextStage);
+          });
+        },
       });
 
-      setStage('published');
-      setUploadProgress(1);
       await clearDraftStorage();
-      resetLocalForm();
-      await sleep(PUBLISHED_STAGE_DELAY_MS);
-      goToFeed(created.id);
+      if (isMountedRef.current) {
+        resetLocalForm();
+        await sleep(PUBLISHED_STAGE_DELAY_MS);
+        goToFeed(result.createdPostId);
+      } else {
+        await safeUnlinkManagedMediaUri(selectedVideoUri);
+        Alert.alert(t('alerts.success'), t('feed.postPublishedBackground'));
+      }
     } catch (publishError) {
-      console.error('[CreateDronePost] publish failed', {
+      const currentStep = ((publishError as any)?.publishStep ??
+        'create_post') as CreateDronePostStep;
+      logger.error('[CreateDronePost] publish failed', {
         step: currentStep,
         error: publishError,
       });
-      const errorCode = String((publishError as any)?.code ?? '').toLowerCase();
-      const errorStatus = Number((publishError as any)?.status ?? 0);
-      const rawMessage = normalizeErrorMessage(publishError).toLowerCase();
-      const isAuthError =
-        errorStatus === 401 ||
-        errorStatus === 403 ||
-        errorCode.includes('auth') ||
-        errorCode.includes('unauthorized') ||
-        rawMessage.includes('usuario no autenticado') ||
-        rawMessage.includes('unauth') ||
-        rawMessage.includes('unauthorized') ||
-        rawMessage.includes('auth token');
-      const isUploadError =
-        currentStep !== 'create_post' ||
-        errorCode.includes('bunny/') ||
-        rawMessage.includes('bunny') ||
-        rawMessage.includes('upload') ||
-        rawMessage.includes('storage') ||
-        rawMessage.includes('timeout');
-      const isNetworkUploadError =
-        errorCode.includes('network') ||
-        errorCode.includes('timeout') ||
-        errorCode.includes('retry') ||
-        errorCode.includes('unavailable') ||
-        rawMessage.includes('network') ||
-        rawMessage.includes('timed out') ||
-        rawMessage.includes('timeout') ||
-        rawMessage.includes('connection');
-      const message = isAuthError
-        ? t('alerts.reauthFailedError')
-        : isUploadError && isNetworkUploadError
-          ? t('alerts.videoUploadError')
-          : t('feed.postPublishError');
-      console.warn('[CreateDronePost] publish error classified', {
+      const errorKind = classifyCreateDronePostError({
+        error: publishError,
         step: currentStep,
-        errorCode,
-        errorStatus,
-        isAuthError,
-        isUploadError,
-        isNetworkUploadError,
       });
-      setLastErrorMessage(message);
+      const message =
+        errorKind === 'storage_permission' || errorKind === 'network_upload'
+          ? t('alerts.videoUploadError')
+          : errorKind === 'auth'
+            ? t('alerts.reauthFailedError')
+            : t('feed.postPublishError');
+      logger.warn('[CreateDronePost] publish error classified', {
+        step: currentStep,
+        errorKind,
+      });
+      setIfMounted(() => {
+        setLastErrorMessage(message);
+      });
       Alert.alert(t('alerts.error'), message);
-      setStage('idle');
+      setIfMounted(() => {
+        setStage('idle');
+      });
     } finally {
-      setSubmitting(false);
-      await cleanupTempFiles(tempFilesToCleanup);
+      setIfMounted(() => {
+        setSubmitting(false);
+      });
     }
   };
 
@@ -708,10 +567,13 @@ export default function CreateDronePostScreen({navigation}: {navigation: any}) {
         </TouchableOpacity>
         <Text style={styles.title}>{t('feed.publishDronePost')}</Text>
         <TouchableOpacity
-          style={[styles.publishButton, (!canSubmit || isSubmitting) && styles.publishButtonDisabled]}
-          disabled={!canSubmit || isSubmitting}
+          style={[
+            styles.publishButton,
+            (!canSubmit || isSubmitting || isPreparingVideo) && styles.publishButtonDisabled,
+          ]}
+          disabled={!canSubmit || isSubmitting || isPreparingVideo}
           onPress={handlePublish}>
-          {isSubmitting ? (
+          {isSubmitting || isPreparingVideo ? (
             <ActivityIndicator size="small" color="#fff" />
           ) : (
             <Text style={styles.publishButtonText}>{t('feed.publish')}</Text>
@@ -730,11 +592,23 @@ export default function CreateDronePostScreen({navigation}: {navigation: any}) {
         />
 
         <View style={styles.actionsRow}>
-          <TouchableOpacity style={styles.actionButton} onPress={pickImages}>
+          <TouchableOpacity
+            style={[
+              styles.actionButton,
+              (isSubmitting || isPreparingVideo) && styles.actionButtonDisabled,
+            ]}
+            disabled={isSubmitting || isPreparingVideo}
+            onPress={pickImages}>
             <Icon name="image-plus" size={20} color={palette.highlight} />
             <Text style={styles.actionButtonText}>{t('feed.addPhotos')}</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.actionButton} onPress={pickVideo}>
+          <TouchableOpacity
+            style={[
+              styles.actionButton,
+              (isSubmitting || isPreparingVideo) && styles.actionButtonDisabled,
+            ]}
+            disabled={isSubmitting || isPreparingVideo}
+            onPress={pickVideo}>
             <Icon name="video-plus" size={20} color={palette.highlight} />
             <Text style={styles.actionButtonText}>{t('feed.addVideo')}</Text>
           </TouchableOpacity>
@@ -747,6 +621,7 @@ export default function CreateDronePostScreen({navigation}: {navigation: any}) {
                 <Image source={{uri: asset.uri}} style={styles.image} />
                 <TouchableOpacity
                   style={styles.removeButton}
+                  disabled={isSubmitting || isPreparingVideo}
                   onPress={() => {
                     setImages(prev => prev.filter((_, currentIndex) => currentIndex !== index));
                   }}>
@@ -780,15 +655,20 @@ export default function CreateDronePostScreen({navigation}: {navigation: any}) {
                 <Text style={styles.videoHint}>{t('feed.oneVideoLimit')}</Text>
               </View>
               <TouchableOpacity
-                onPress={() => {
-                  setVideoUri(null);
-                  setVideoName(null);
-                  setVideoType(null);
-                }}>
+                disabled={isSubmitting || isPreparingVideo}
+                onPress={clearSelectedVideo}>
                 <Icon name="delete-outline" size={20} color="#ef4444" />
               </TouchableOpacity>
             </View>
           </>
+        ) : null}
+
+        {isPreparingVideo ? (
+          <View style={styles.uploadCard}>
+            <Text style={styles.uploadTitle}>{t('addSpot.compressingVideo')}</Text>
+            <ActivityIndicator size="small" color={palette.highlight} />
+            <Text style={styles.uploadHintText}>{t('feed.videoPreparationHint')}</Text>
+          </View>
         ) : null}
 
         {isSubmitting ? (
@@ -798,6 +678,11 @@ export default function CreateDronePostScreen({navigation}: {navigation: any}) {
               <View style={[styles.progressFill, {width: `${Math.round(uploadProgress * 100)}%`}]} />
             </View>
             <Text style={styles.uploadProgressText}>{Math.round(uploadProgress * 100)}%</Text>
+            <TouchableOpacity style={styles.backgroundButton} onPress={continueUploadInBackground}>
+              <Icon name="arrow-collapse-down" size={16} color={palette.textSecondary} />
+              <Text style={styles.backgroundButtonText}>{t('feed.continueInBackground')}</Text>
+            </TouchableOpacity>
+            <Text style={styles.uploadHintText}>{t('feed.backgroundUploadHint')}</Text>
           </View>
         ) : null}
 
@@ -882,6 +767,9 @@ const styles = StyleSheet.create({
     borderColor: '#dbe3ef',
     borderRadius: 10,
     backgroundColor: '#fff',
+  },
+  actionButtonDisabled: {
+    opacity: 0.5,
   },
   actionButtonText: {
     color: palette.textSecondary,
@@ -991,6 +879,29 @@ const styles = StyleSheet.create({
     color: palette.textMuted,
     fontSize: 12,
     textAlign: 'right',
+  },
+  backgroundButton: {
+    marginTop: 10,
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#dbe3ef',
+    backgroundColor: '#f8fafc',
+  },
+  backgroundButtonText: {
+    color: palette.textSecondary,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  uploadHintText: {
+    marginTop: 8,
+    color: palette.textMuted,
+    fontSize: 12,
   },
   errorCard: {
     marginTop: 8,

@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator, ScrollView, Image, TouchableOpacity, Linking, Alert, FlatList } from 'react-native';
-import { useRoute, useNavigation } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
 import { getUserProfile, getSpotsByUserId, UserProfile, Spot } from '../../src/services/firestoreService';
 import Icon from 'react-native-vector-icons/FontAwesome';
+import { palette, radii, shadows } from '../../src/constants/theme';
+import logger from '../../src/utils/logger';
+import type {AppStackScreenProps} from '../../src/navigation/types';
 
 const pilotTypeCanonicalMap: Record<string, string> = {
   piloto: 'pilot',
@@ -57,11 +59,9 @@ const normalizePilotTypes = (profile?: { pilotType?: string | string[] | null; p
   return Array.from(result);
 };
 
-const UserProfileScreen = () => {
+const UserProfileScreen = ({route, navigation}: AppStackScreenProps<'UserProfile'>) => {
   const { t } = useTranslation();
-  const route = useRoute();
-  const navigation = useNavigation();
-  const { userId } = route.params as { userId: string };
+  const { userId } = route.params;
   const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [spots, setSpots] = useState<Spot[]>([]);
@@ -80,7 +80,7 @@ const UserProfileScreen = () => {
         setSpots(fetchedSpots);
 
       } catch (error) {
-        console.error("Error fetching user profile and spots: ", error);
+        logger.error('Error fetching user profile and spots', error);
         Alert.alert(t('alerts.error'), t('alerts.fetchProfileError'));
       } finally {
         setLoading(false);
@@ -95,15 +95,35 @@ const UserProfileScreen = () => {
     if (type === 'email') {
       finalUrl = `mailto:${url}`;
     } else if (type === 'whatsapp') {
-      const cleanNumber = url.replace(/[^0-9]/g, '');
-      finalUrl = `https://wa.me/${cleanNumber}`;
+      const cleanNumber = url.replace(/\D/g, '');
+      if (!cleanNumber || cleanNumber.length < 8) {
+        Alert.alert(t('alerts.error'), t('alerts.cannotOpenLink'));
+        return;
+      }
+      const appUrl = `whatsapp://send?phone=${cleanNumber}`;
+      const webUrl = `https://wa.me/${cleanNumber}`;
+      try {
+        const canOpenApp = await Linking.canOpenURL(appUrl);
+        if (canOpenApp) {
+          await Linking.openURL(appUrl);
+          return;
+        }
+      } catch (err) {
+        logger.warn('[WhatsApp] canOpenURL failed', err);
+      }
+      try {
+        await Linking.openURL(webUrl);
+        return;
+      } catch (err) {
+        logger.warn('[WhatsApp] fallback web failed', err);
+        Alert.alert(t('alerts.error'), t('alerts.cannotOpenLink'));
+        return;
+      }
     } else if (!url.startsWith('http')) {
       finalUrl = `https://${url}`;
     }
 
-    console.log('Attempting to open URL:', finalUrl);
     const supported = await Linking.canOpenURL(finalUrl);
-    console.log('Is URL supported?', supported);
 
     if (supported) {
       await Linking.openURL(finalUrl);
@@ -115,7 +135,7 @@ const UserProfileScreen = () => {
   const renderSpotItem = ({ item }: { item: Spot }) => (
     <TouchableOpacity 
       style={styles.spotItem}
-      onPress={() => navigation.navigate('SpotDetail' as never, { spotId: item.id } as never)}
+      onPress={() => navigation.navigate('SpotDetail', { spotId: item.id })}
     >
       <Text style={styles.spotName}>{item.name}</Text>
       <Text style={styles.spotDescription}>{item.description}</Text>
@@ -166,8 +186,8 @@ const UserProfileScreen = () => {
 
   return (
     <ScrollView style={styles.container}>
-      <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-        <Icon name="arrow-left" size={20} color="#000" />
+      <TouchableOpacity style={styles.closeButton} onPress={() => navigation.goBack()}>
+        <Icon name="close" size={20} color={palette.textPrimary} />
       </TouchableOpacity>
       <View style={styles.profileHeader}>
         {profile.backgroundPictureUrl ? (
@@ -259,21 +279,28 @@ const UserProfileScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: palette.backgroundLight,
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  backButton: {
+  closeButton: {
     position: 'absolute',
-    top: 20,
-    left: 20,
+    top: 16,
+    right: 16,
     zIndex: 1,
+    backgroundColor: palette.backgroundCard,
+    borderRadius: radii.lg,
+    padding: 8,
+    borderWidth: 1,
+    borderColor: palette.borderLight,
+    ...shadows.subtle,
   },
   profileHeader: {
     alignItems: 'center',
+    marginBottom: 12,
   },
   backgroundPicture: {
     width: '100%',
@@ -282,7 +309,7 @@ const styles = StyleSheet.create({
   backgroundPicturePlaceholder: {
     width: '100%',
     height: 150,
-    backgroundColor: '#e0e0e0',
+    backgroundColor: palette.backgroundMuted,
   },
   headerContent: {
     alignItems: 'center',
@@ -293,28 +320,29 @@ const styles = StyleSheet.create({
     height: 120,
     borderRadius: 60,
     borderWidth: 4,
-    borderColor: '#fff',
+    borderColor: palette.backgroundCard,
     marginBottom: 10,
   },
   profilePicturePlaceholder: {
     width: 120,
     height: 120,
     borderRadius: 60,
-    backgroundColor: '#e0e0e0',
+    backgroundColor: palette.backgroundMuted,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 4,
-    borderColor: '#fff',
+    borderColor: palette.backgroundCard,
     marginBottom: 10,
   },
   displayName: {
     fontSize: 24,
     fontWeight: 'bold',
     marginBottom: 10,
+    color: palette.textPrimary,
   },
   infoText: {
     fontSize: 16,
-    color: 'gray',
+    color: palette.textSecondary,
     textAlign: 'center',
     marginHorizontal: 20,
   },
@@ -326,10 +354,12 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
     marginBottom: 10,
+    color: palette.textPrimary,
   },
   bioText: {
     fontSize: 16,
     lineHeight: 24,
+    color: palette.textSecondary,
   },
   socialIconsContainer: {
     flexDirection: 'row',
@@ -345,20 +375,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: 32,
     fontSize: 16,
     width: '100%',
+    color: palette.textSecondary,
   },
   spotItem: {
-    backgroundColor: '#f9f9f9',
+    backgroundColor: palette.backgroundCard,
     padding: 20,
     marginVertical: 8,
-    borderRadius: 5,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: palette.borderLight,
+    ...shadows.subtle,
   },
   spotName: {
     fontSize: 18,
     fontWeight: 'bold',
+    color: palette.textPrimary,
   },
   spotDescription: {
     fontSize: 14,
-    color: 'gray',
+    color: palette.textSecondary,
     marginTop: 5,
   },
 });

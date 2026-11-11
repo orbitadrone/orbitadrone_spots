@@ -1,10 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator, ScrollView, Alert, Button, Image, Linking, TouchableOpacity, Share, Modal, TextInput } from 'react-native';
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { View, Text, StyleSheet, ActivityIndicator, ScrollView, Alert, Image, Linking, TouchableOpacity, Share } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { Spot, Review, UserProfile, getSpot, getReviewsForSpot, getUserProfile, deleteSpot } from '../../src/services/firestoreService';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import CheckBox from '@react-native-community/checkbox';
-import Video from 'react-native-video';
 
 import ImageViewing from 'react-native-image-viewing';
 import { Rating } from 'react-native-ratings';
@@ -13,27 +11,30 @@ import { useAuthContext } from '../context/AuthContext';
 import { BUNNY_LIBRARY_ID } from '../../src/constants/bunnyEnv';
 import { buildSpotShareUrl } from '../../src/constants/links';
 import { palette, radii, shadows } from '../../src/constants/theme';
+import logger from '../../src/utils/logger';
+import ReportReasonModal, {ReportReasonOption} from '../components/ReportReasonModal';
+import SpotDetailVideoModal, {SpotDetailVideoInfo} from '../components/SpotDetailVideoModal';
+import SpotReviewCard from '../components/SpotReviewCard';
+import {
+  buildBunnyEmbedUrl,
+  buildVideoSourceCandidates,
+  extractBunnyVideoGuid,
+  isBunnyVideoUrl,
+  normalizeRemoteVideoUrl,
+} from '../../src/utils/videoPlayback';
+import type {AppStackScreenProps} from '../../src/navigation/types';
 
 const createReasonState = (options: Array<{ key: string }>) =>
   Object.fromEntries(options.map(option => [option.key, false])) as Record<string, boolean>;
 
-const getBunnyMp4FallbackUrls = (videoUrl: string) => {
-  const trimmedUrl = videoUrl.trim();
-  if (!/\/playlist\.m3u8(\?|$)/i.test(trimmedUrl)) {
-    return [trimmedUrl];
-  }
-
-  const mp4_720 = trimmedUrl.replace(/\/playlist\.m3u8(\?.*)?$/i, '/play_720p.mp4');
-  const mp4_480 = trimmedUrl.replace(/\/playlist\.m3u8(\?.*)?$/i, '/play_480p.mp4');
-  const mp4_360 = trimmedUrl.replace(/\/playlist\.m3u8(\?.*)?$/i, '/play_360p.mp4');
-
-  return Array.from(new Set([mp4_720, mp4_480, mp4_360, trimmedUrl]));
+type DisplayReview = {
+  review: Review;
+  authorName: string;
+  authorProfileId: string | null;
 };
 
-
-const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) => {
+const SpotDetailScreen = ({navigation, route}: AppStackScreenProps<'SpotDetail'>) => {
   const { t } = useTranslation();
-  const navigation = useNavigation<any>();
   const { spotId } = route.params;
   const [spot, setSpot] = useState<Spot | null>(null);
   const [reviews, setReviews] = useState<Review[]>([]);
@@ -44,15 +45,10 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
   
   // Estado unificado para el modal de video
   const [videoModalVisible, setVideoModalVisible] = useState(false);
-  const [currentVideoInfo, setCurrentVideoInfo] = useState<{
-    url: string;
-    type: 'native' | 'bunny';
-    guid?: string;
-    fallbackUrls?: string[];
-  } | null>(null);
+  const [currentVideoInfo, setCurrentVideoInfo] = useState<SpotDetailVideoInfo | null>(null);
   const [imageModalVisible, setImageModalVisible] = useState(false);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
-  const spotReportOptions = useMemo(
+  const spotReportOptions = useMemo<ReportReasonOption[]>(
     () => [
       { key: 'photo', label: t('reportReasons.photo') },
       { key: 'video', label: t('reportReasons.video') },
@@ -61,7 +57,7 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
     ],
     [t],
   );
-  const reviewReportOptions = useMemo(
+  const reviewReportOptions = useMemo<ReportReasonOption[]>(
     () => [
       { key: 'text', label: t('reportReasons.text') },
       { key: 'spam', label: t('reportReasons.spam') },
@@ -77,6 +73,47 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
   const [reviewReportTarget, setReviewReportTarget] = useState<Review | null>(null);
   const [reviewReportReasons, setReviewReportReasons] = useState<Record<string, boolean>>({});
   const [reviewReportNotes, setReviewReportNotes] = useState('');
+  const closeVideoModal = useCallback(() => {
+    setVideoModalVisible(false);
+    setCurrentVideoInfo(null);
+  }, []);
+  const closeImageModal = useCallback(() => {
+    setImageModalVisible(false);
+  }, []);
+  const navigateToUserProfile = useCallback(
+    (userId: string) => {
+      navigation.navigate('UserProfile', {userId});
+    },
+    [navigation],
+  );
+  const galleryImages = useMemo(
+    () =>
+      (spot?.galleryImages ?? []).filter(
+        (uri): uri is string => typeof uri === 'string' && uri.trim().length > 0,
+      ),
+    [spot?.galleryImages],
+  );
+  const displayReviews = useMemo<DisplayReview[]>(
+    () =>
+      reviews.reduce<DisplayReview[]>((accumulator, review) => {
+        const hasRating = typeof review.rating === 'number' && review.rating > 0;
+        const hasText = typeof review.text === 'string' && review.text.trim().length > 0;
+        if (!hasRating && !hasText) {
+          return accumulator;
+        }
+        const authorProfile = reviewAuthors[review.userId];
+        accumulator.push({
+          review,
+          authorName:
+            authorProfile?.displayName?.trim()?.length
+              ? authorProfile.displayName
+              : t('common.unknownUser'),
+          authorProfileId: authorProfile?.id ?? null,
+        });
+        return accumulator;
+      }, []),
+    [reviewAuthors, reviews, t],
+  );
 
   const openImageModal = useCallback((index: number) => {
     setCurrentImageIndex(index);
@@ -213,7 +250,7 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
                     const profile = await getUserProfile(id);
                     return [id, profile] as const;
                   } catch (error) {
-                    console.warn('[SpotDetail] Failed to load review author profile', error);
+                    logger.warn('[SpotDetail] Failed to load review author profile', error);
                     return [id, null] as const;
                   }
                 }),
@@ -234,7 +271,7 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
             navigation.goBack();
           }
         } catch (error) {
-          console.error("Error fetching spot details: ", error);
+          logger.error('Error fetching spot details:', error);
           Alert.alert(t('alerts.error'), t('alerts.fetchSpotError'));
           navigation.goBack();
         } finally {
@@ -258,11 +295,10 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
 
   useEffect(() => {
     const unsubscribe = navigation.addListener('blur', () => {
-      setVideoModalVisible(false);
-      setCurrentVideoInfo(null);
+      closeVideoModal();
     });
     return unsubscribe;
-  }, [navigation]);
+  }, [closeVideoModal, navigation]);
 
   const onShare = async () => {
     if (!spot) return;
@@ -308,13 +344,13 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
           return;
         }
       } catch (err) {
-        console.warn('[WhatsApp] canOpenURL failed', err);
+        logger.warn('[WhatsApp] canOpenURL failed', err);
       }
       try {
         await Linking.openURL(webUrl);
         return;
       } catch (err) {
-        console.warn('[WhatsApp] fallback web failed', err);
+        logger.warn('[WhatsApp] fallback web failed', err);
         Alert.alert(t('alerts.error'), t('alerts.cannotOpenLink'));
         return;
       }
@@ -349,7 +385,7 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
               Alert.alert(t('alerts.success'), t('alerts.spotDeletedSuccessfully'));
               navigation.goBack(); // Navegar de vuelta después de eliminar
             } catch (error) {
-              console.error("Error deleting spot: ", error);
+              logger.error('Error deleting spot:', error);
               Alert.alert(t('alerts.error'), t('alerts.deleteSpotError'));
             }
           },
@@ -359,53 +395,37 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
     );
   };
 
-  const openVideoModal = (url: string) => {
-    const trimmedUrl = url?.trim();
+  const openVideoModal = useCallback((url: string) => {
+    const trimmedUrl = normalizeRemoteVideoUrl(url || '');
     if (!trimmedUrl) {
       return;
     }
 
-    console.log('[Video] openVideoModal', trimmedUrl);
+    logger.log('[Video] openVideoModal', trimmedUrl);
 
     const isFirebaseUrl = trimmedUrl.includes('firebasestorage.googleapis.com');
-    const bunnyGuidMatch = trimmedUrl.match(
-      /\/([0-9a-fA-F-]{36})(?:\/[^/]*)?(?:\?|$)/,
-    );
+    const bunnyGuid = extractBunnyVideoGuid(trimmedUrl);
     const isBunnyUrl =
-      trimmedUrl.includes('.b-cdn.net') ||
-      trimmedUrl.includes('video.bunnycdn.com') ||
-      /\.m3u8(\?|$)/i.test(trimmedUrl) ||
-      !!bunnyGuidMatch;
+      isBunnyVideoUrl(trimmedUrl) || /\.m3u8(\?|$)/i.test(trimmedUrl) || Boolean(bunnyGuid);
     const isDirectFile =
       /\.(mp4|mov|m4v|webm)(\?|$)/i.test(trimmedUrl);
 
-    console.log('[Video] classify', {
+    logger.log('[Video] classify', {
       isFirebaseUrl,
       isBunnyUrl,
       isDirectFile,
-      hasGuid: !!bunnyGuidMatch,
+      hasGuid: !!bunnyGuid,
     });
 
-    if (isBunnyUrl && bunnyGuidMatch) {
-      const guid = bunnyGuidMatch[1];
-      if (BUNNY_LIBRARY_ID) {
-        const embedUrl = `https://iframe.mediadelivery.net/embed/${BUNNY_LIBRARY_ID}/${guid}?autoplay=false`;
-        console.log('[Video] using bunny embed', embedUrl);
-        setCurrentVideoInfo({
-          url: embedUrl,
-          type: 'bunny',
-          guid,
-        });
-        setVideoModalVisible(true);
-        return;
-      }
+    const shouldUseBunnyEmbed = Boolean(BUNNY_LIBRARY_ID);
 
-      const nativeCandidates = getBunnyMp4FallbackUrls(trimmedUrl);
+    if (isBunnyUrl && bunnyGuid && shouldUseBunnyEmbed) {
+      const embedUrl = buildBunnyEmbedUrl(BUNNY_LIBRARY_ID, bunnyGuid, {autoplay: false});
+      logger.log('[Video] using bunny embed', embedUrl);
       setCurrentVideoInfo({
-        url: nativeCandidates[0],
-        type: 'native',
-        guid,
-        fallbackUrls: nativeCandidates.slice(1),
+        url: embedUrl,
+        type: 'bunny',
+        guid: bunnyGuid,
       });
       setVideoModalVisible(true);
       return;
@@ -413,18 +433,25 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
 
     const shouldBeNative = isFirebaseUrl || isDirectFile || !isBunnyUrl;
     if (shouldBeNative) {
-      console.log('[Video] using native player', trimmedUrl);
-      const nativeCandidates = isBunnyUrl
-        ? getBunnyMp4FallbackUrls(trimmedUrl)
-        : [trimmedUrl];
+      logger.log('[Video] using native player', trimmedUrl);
+      const nativeCandidates = buildVideoSourceCandidates(trimmedUrl);
       setCurrentVideoInfo({
         url: nativeCandidates[0],
         type: 'native',
         fallbackUrls: nativeCandidates.slice(1),
       });
       setVideoModalVisible(true);
+      return;
     }
-  };
+
+    const nativeCandidates = buildVideoSourceCandidates(trimmedUrl);
+    setCurrentVideoInfo({
+      url: nativeCandidates[0],
+      type: 'native',
+      fallbackUrls: nativeCandidates.slice(1),
+    });
+    setVideoModalVisible(true);
+  }, []);
 
   if (loading) {
     return (
@@ -478,7 +505,7 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
 
       {creatorProfile && (
         <View style={styles.creatorInfoContainer}>
-          <TouchableOpacity onPress={() => navigation.navigate('UserProfile' as never, { userId: spot.createdBy } as never)} style={styles.creatorTouchable}>
+          <TouchableOpacity onPress={() => navigateToUserProfile(spot.createdBy)} style={styles.creatorTouchable}>
             {creatorProfile.profilePictureUrl ? (
               <Image source={{ uri: creatorProfile.profilePictureUrl }} style={styles.creatorAvatar} />
             ) : (
@@ -534,10 +561,10 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
         <TouchableOpacity
           style={styles.addReviewButton}
           onPress={() =>
-            navigation.navigate(
-              'AddReview' as never,
-              { spotId: spot.id, mode: 'rating' } as never,
-            )
+            navigation.navigate('AddReview', {
+              spotId: spot.id,
+              mode: 'rating',
+            })
           }
         >
           <Icon name="plus-circle-outline" size={24} color="#007BFF" />
@@ -545,11 +572,11 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
         </TouchableOpacity>
       </View>
 
-      {spot.galleryImages && spot.galleryImages.length > 0 && (
+      {galleryImages.length > 0 && (
         <View style={styles.sectionContainer}>
           <Text style={styles.sectionTitle}>{t('spotDetail.gallery')}</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            {spot.galleryImages.map((url, index) => (
+            {galleryImages.map((url, index) => (
               <TouchableOpacity
                 key={index}
                 activeOpacity={0.8}
@@ -587,7 +614,7 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
         <View style={styles.adminActionsContainer}>
           <TouchableOpacity
             style={[styles.manageButton, styles.manageButtonNeutral]}
-            onPress={() => navigation.navigate('AddSpot' as never, { spot: spot } as never)}
+            onPress={() => navigation.navigate('AddSpot', {spot})}
           >
             <Text style={styles.manageButtonText}>{t('spotDetail.editSpotButton')}</Text>
           </TouchableOpacity>
@@ -604,7 +631,7 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
         <View style={styles.improveButtonContainer}>
           <TouchableOpacity
             style={[styles.manageButton, styles.manageButtonNeutral]}
-            onPress={() => navigation.navigate('AddSpot' as never, { originalSpot: spot } as never)}
+            onPress={() => navigation.navigate('AddSpot', {originalSpot: spot})}
           >
             <Text style={styles.manageButtonText}>{t('spotDetail.improveSpotButton')}</Text>
           </TouchableOpacity>
@@ -616,10 +643,10 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
         <TouchableOpacity
           style={styles.addReviewTextButton}
           onPress={() =>
-            navigation.navigate(
-              'AddReview' as never,
-              { spotId: spot.id, mode: 'comment' } as never,
-            )
+            navigation.navigate('AddReview', {
+              spotId: spot.id,
+              mode: 'comment',
+            })
           }
         >
           <Icon name="pencil-plus-outline" size={20} color="#007BFF" />
@@ -627,14 +654,14 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
         </TouchableOpacity>
       </View>
 
-      {reviews.length === 0 ? (
+      {displayReviews.length === 0 ? (
         <TouchableOpacity
           style={styles.noReviewsContainer}
           onPress={() =>
-            navigation.navigate(
-              'AddReview' as never,
-              { spotId: spot.id, mode: 'comment' } as never,
-            )
+            navigation.navigate('AddReview', {
+              spotId: spot.id,
+              mode: 'comment',
+            })
           }
         >
           <Icon name="star-plus-outline" size={40} color="#007BFF" />
@@ -642,255 +669,68 @@ const SpotDetailScreen = ({ route }: { route: { params: { spotId: string } } }) 
           <Text style={styles.noReviewsText}>{t('spotDetail.noReviewsYet')}</Text>
         </TouchableOpacity>
       ) : (
-        reviews.map(reviewItem => {
-          const displayRating =
-            typeof reviewItem.rating === 'number' && reviewItem.rating > 0;
-          const displayText =
-            typeof reviewItem.text === 'string' && reviewItem.text.trim().length > 0;
-          if (!displayRating && !displayText) {
-            return null;
-          }
-          const authorProfile = reviewAuthors[reviewItem.userId];
-          const authorName =
-            authorProfile?.displayName?.trim()?.length
-              ? authorProfile.displayName
-              : t('common.unknownUser');
-          const goToAuthorProfile = () => {
-            if (!authorProfile?.id) {
-              return;
-            }
-            navigation.navigate('UserProfile' as never, { userId: authorProfile.id } as never);
-          };
-          return (
-            <View key={reviewItem.id} style={styles.reviewCard}>
-              <TouchableOpacity onPress={goToAuthorProfile} disabled={!authorProfile?.id}>
-                <Text
-                  style={[
-                    styles.reviewAuthor,
-                    authorProfile?.id ? styles.reviewAuthorLink : undefined,
-                  ]}
-                >
-                  {authorName}
-                </Text>
-              </TouchableOpacity>
-              {displayRating && (
-                <Rating
-                  type="star"
-                  ratingCount={5}
-                  imageSize={15}
-                  readonly
-                  startingValue={reviewItem.rating}
-                  style={styles.reviewRating}
-                />
-              )}
-              {displayText && <Text style={styles.reviewText}>{reviewItem.text}</Text>}
-            {reviewItem.photos && reviewItem.photos.length > 0 && (
-              <View style={styles.reviewPhotosContainer}>
-                {reviewItem.photos.map((photoUri, index) => (
-                  <Image key={index} source={{ uri: photoUri }} style={styles.reviewPhoto} />
-                ))}
-              </View>
-            )}
-            {reviewItem.videoUrl && (
-              <Button title={t('spotDetail.viewVideo')} onPress={() => openVideoModal(reviewItem.videoUrl!)} />
-            )}
-            <TouchableOpacity
-              style={styles.reviewReportButton}
-              onPress={() => openReviewReportModal(reviewItem)}
-            >
-              <Icon name="flag-outline" size={16} color="#666" />
-              <Text style={styles.reviewReportText}>{t('spotDetail.reportReviewButton')}</Text>
-            </TouchableOpacity>
-            </View>
-          );
-        })
+        displayReviews.map(({review, authorName, authorProfileId}) => (
+          <SpotReviewCard
+            key={review.id}
+            review={review}
+            authorName={authorName}
+            authorProfileId={authorProfileId}
+            reportLabel={t('spotDetail.reportReviewButton')}
+            viewVideoLabel={t('spotDetail.viewVideo')}
+            onPressAuthor={navigateToUserProfile}
+            onOpenVideo={openVideoModal}
+            onReport={() => openReviewReportModal(review)}
+          />
+        ))
       )}
 
-      <Modal
-        animationType="fade"
-        transparent
+      <ReportReasonModal
         visible={spotReportModalVisible}
-        onRequestClose={closeSpotReportModal}
-      >
-        <View style={styles.reportModalOverlay}>
-          <View style={styles.reportModalContent}>
-            <Text style={styles.reportModalTitle}>{t('spotDetail.reportSpotTitle')}</Text>
-            <Text style={styles.reportModalDescription}>{t('spotDetail.reportSpotDescription')}</Text>
-            {spotReportOptions.map(option => (
-              <View key={option.key} style={styles.reportCheckboxRow}>
-                <CheckBox
-                  value={!!spotReportReasons[option.key]}
-                  onValueChange={() => toggleSpotReportReason(option.key)}
-                  tintColors={{ true: '#007BFF', false: '#ccc' }}
-                />
-                <Text style={styles.reportCheckboxLabel}>{option.label}</Text>
-              </View>
-            ))}
-            <TextInput
-              style={styles.reportNotesInput}
-              placeholder={t('spotDetail.reportNotesPlaceholder')}
-              placeholderTextColor="#888"
-              value={spotReportNotes}
-              onChangeText={setSpotReportNotes}
-              multiline
-            />
-            <View style={styles.reportModalActions}>
-              <TouchableOpacity
-                style={[styles.reportActionButton, styles.reportCancelButton]}
-                onPress={closeSpotReportModal}
-              >
-                <Text style={styles.reportCancelText}>{t('spotDetail.reportCancelButton')}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.reportActionButton, styles.reportSubmitButton]}
-                onPress={handleSubmitSpotReport}
-              >
-                <Text style={styles.reportSubmitText}>{t('spotDetail.reportSubmitButton')}</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      <Modal
-        animationType="fade"
-        transparent
-        visible={reviewReportModalVisible}
-        onRequestClose={closeReviewReportModal}
-      >
-        <View style={styles.reportModalOverlay}>
-          <View style={styles.reportModalContent}>
-            <Text style={styles.reportModalTitle}>{t('spotDetail.reportReviewTitle')}</Text>
-            <Text style={styles.reportModalDescription}>{t('spotDetail.reportReviewDescription')}</Text>
-            {reviewReportOptions.map(option => (
-              <View key={option.key} style={styles.reportCheckboxRow}>
-                <CheckBox
-                  value={!!reviewReportReasons[option.key]}
-                  onValueChange={() => toggleReviewReportReason(option.key)}
-                  tintColors={{ true: '#007BFF', false: '#ccc' }}
-                />
-                <Text style={styles.reportCheckboxLabel}>{option.label}</Text>
-              </View>
-            ))}
-            <TextInput
-              style={styles.reportNotesInput}
-              placeholder={t('spotDetail.reportNotesPlaceholder')}
-              placeholderTextColor="#888"
-              value={reviewReportNotes}
-              onChangeText={setReviewReportNotes}
-              multiline
-            />
-            <View style={styles.reportModalActions}>
-              <TouchableOpacity
-                style={[styles.reportActionButton, styles.reportCancelButton]}
-                onPress={closeReviewReportModal}
-              >
-                <Text style={styles.reportCancelText}>{t('spotDetail.reportCancelButton')}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.reportActionButton, styles.reportSubmitButton]}
-                onPress={handleSubmitReviewReport}
-              >
-                <Text style={styles.reportSubmitText}>{t('spotDetail.reportSubmitButton')}</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      <ImageViewing
-        images={spot.galleryImages?.map((uri) => ({ uri })) || []}
-        imageIndex={currentImageIndex}
-        visible={imageModalVisible}
-        onRequestClose={() => setImageModalVisible(false)}
+        title={t('spotDetail.reportSpotTitle')}
+        description={t('spotDetail.reportSpotDescription')}
+        options={spotReportOptions}
+        selectedReasons={spotReportReasons}
+        notes={spotReportNotes}
+        notesPlaceholder={t('spotDetail.reportNotesPlaceholder')}
+        cancelLabel={t('spotDetail.reportCancelButton')}
+        submitLabel={t('spotDetail.reportSubmitButton')}
+        onToggleReason={toggleSpotReportReason}
+        onChangeNotes={setSpotReportNotes}
+        onClose={closeSpotReportModal}
+        onSubmit={handleSubmitSpotReport}
       />
 
-      <Modal
-        animationType="slide"
-        transparent={false}
+      <ReportReasonModal
+        visible={reviewReportModalVisible}
+        title={t('spotDetail.reportReviewTitle')}
+        description={t('spotDetail.reportReviewDescription')}
+        options={reviewReportOptions}
+        selectedReasons={reviewReportReasons}
+        notes={reviewReportNotes}
+        notesPlaceholder={t('spotDetail.reportNotesPlaceholder')}
+        cancelLabel={t('spotDetail.reportCancelButton')}
+        submitLabel={t('spotDetail.reportSubmitButton')}
+        onToggleReason={toggleReviewReportReason}
+        onChangeNotes={setReviewReportNotes}
+        onClose={closeReviewReportModal}
+        onSubmit={handleSubmitReviewReport}
+      />
+
+      <ImageViewing
+        images={galleryImages.map(uri => ({uri}))}
+        imageIndex={currentImageIndex}
+        visible={imageModalVisible}
+        onRequestClose={closeImageModal}
+      />
+
+      <SpotDetailVideoModal
         visible={videoModalVisible && !!currentVideoInfo}
-        onRequestClose={() => {
-          setVideoModalVisible(false);
-          setCurrentVideoInfo(null);
-        }}
-      >
-        <View style={styles.modalContainer}>
-          <TouchableOpacity
-            style={styles.modalCloseButton}
-            onPress={() => {
-              setVideoModalVisible(false);
-              setCurrentVideoInfo(null);
-            }}
-          >
-            <Icon name="close" size={30} color="#fff" />
-          </TouchableOpacity>
-          
-          {currentVideoInfo && (
-            currentVideoInfo.type === 'bunny'
-              ? // Lazy require WebView only on iOS to avoid Android build-time dependency
-                (() => {
-                  console.log('[Video] render bunny', currentVideoInfo);
-                  const { WebView } = require('react-native-webview');
-                  return (
-                    <WebView
-                      style={styles.webview}
-                      javaScriptEnabled
-                      domStorageEnabled
-                      allowsFullscreenVideo
-                      allowsInlineMediaPlayback
-                      mediaPlaybackRequiresUserAction={false}
-                      originWhitelist={['*']}
-                      onShouldStartLoadWithRequest={(request: any) => {
-                        const url = (request?.url || '').toLowerCase();
-                        return url.startsWith('https://iframe.mediadelivery.net/');
-                      }}
-                      source={{ uri: currentVideoInfo.url }}
-                      thirdPartyCookiesEnabled={false}
-                      javaScriptCanOpenWindowsAutomatically={false}
-                      setSupportMultipleWindows={false}
-                      mixedContentMode="never"
-                    />
-                  );
-                })()
-              : (
-                  <Video
-                    key={currentVideoInfo.url}
-                    // Simple render log; full error handling is in onError below
-                    onReadyForDisplay={() =>
-                      console.log('[Video] render native', currentVideoInfo)
-                    }
-                    source={{ uri: currentVideoInfo.url }}
-                    style={styles.videoPlayer}
-                    controls
-                    resizeMode="contain"
-                    onError={e => {
-                      console.log('Video Error', e);
-                      setCurrentVideoInfo(previous => {
-                        if (
-                          !previous ||
-                          previous.type !== 'native' ||
-                          !previous.fallbackUrls?.length
-                        ) {
-                          Alert.alert(t('alerts.error'), t('alerts.videoPlaybackError'));
-                          return previous;
-                        }
-                        const [nextUrl, ...rest] = previous.fallbackUrls;
-                        console.log('[Video] trying fallback source', {
-                          from: previous.url,
-                          to: nextUrl,
-                        });
-                        return {
-                          ...previous,
-                          url: nextUrl,
-                          fallbackUrls: rest,
-                        };
-                      });
-                    }}
-                  />
-                )
-          )}
-        </View>
-      </Modal>
+        videoInfo={currentVideoInfo}
+        playbackErrorTitle={t('alerts.error')}
+        playbackErrorMessage={t('alerts.videoPlaybackError')}
+        onClose={closeVideoModal}
+        onChangeVideoInfo={setCurrentVideoInfo}
+      />
     </ScrollView>
   );
 };
@@ -1092,58 +932,6 @@ const styles = StyleSheet.create({
     marginTop: 4,
     textAlign: 'center',
   },
-  reviewCard: {
-    backgroundColor: palette.backgroundCard,
-    padding: 12,
-    borderRadius: radii.lg,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: palette.borderLight,
-    ...shadows.subtle,
-  },
-  reviewAuthor: {
-    fontWeight: 'bold',
-    marginBottom: 4,
-    color: palette.textPrimary,
-  },
-  reviewAuthorLink: {
-    color: palette.highlight,
-    textDecorationLine: 'underline',
-  },
-  reviewRating: {
-    alignSelf: 'flex-start',
-    marginBottom: 4,
-  },
-  reviewText: {
-    fontSize: 14,
-    color: palette.textSecondary,
-    lineHeight: 22,
-  },
-  reviewReportButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    marginTop: 12,
-    paddingVertical: 2,
-    paddingHorizontal: 4,
-  },
-  reviewReportText: {
-    marginLeft: 4,
-    color: '#666',
-    fontSize: 12,
-    textDecorationLine: 'underline',
-  },
-  reviewPhotosContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    marginTop: 8,
-  },
-  reviewPhoto: {
-    width: 100,
-    height: 100,
-    margin: 4,
-    borderRadius: 8,
-  },
   adminActionsContainer: {
     flexDirection: 'row',
     justifyContent: 'space-around',
@@ -1194,78 +982,6 @@ const styles = StyleSheet.create({
     textDecorationLine: 'underline',
     fontSize: 13,
   },
-  reportModalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-  },
-  reportModalContent: {
-    width: '100%',
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 20,
-  },
-  reportModalTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    marginBottom: 8,
-    textAlign: 'center',
-  },
-  reportModalDescription: {
-    fontSize: 14,
-    color: '#555',
-    marginBottom: 16,
-    textAlign: 'center',
-  },
-  reportCheckboxRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  reportCheckboxLabel: {
-    marginLeft: 12,
-    fontSize: 15,
-    color: '#333',
-    flex: 1,
-    flexWrap: 'wrap',
-  },
-  reportNotesInput: {
-    minHeight: 90,
-    borderWidth: 1,
-    borderColor: '#d0d0d0',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    textAlignVertical: 'top',
-    color: '#000',
-  },
-  reportModalActions: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    marginTop: 18,
-  },
-  reportActionButton: {
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    marginLeft: 8,
-  },
-  reportCancelButton: {
-    backgroundColor: '#f2f2f2',
-  },
-  reportSubmitButton: {
-    backgroundColor: '#007BFF',
-  },
-  reportCancelText: {
-    color: '#555',
-    fontWeight: '600',
-  },
-  reportSubmitText: {
-    color: '#fff',
-    fontWeight: '600',
-  },
   spotImage: {
     width: '100%',
     height: 200,
@@ -1302,23 +1018,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: palette.borderLight,
     ...shadows.subtle,
-  },
-  modalContainer: {
-    flex: 1,
-    backgroundColor: 'black',
-    justifyContent: 'center',
-  },
-  modalCloseButton: {
-    position: 'absolute',
-    top: 40,
-    right: 20,
-    zIndex: 2,
-  },
-  webview: {
-    flex: 1,
-  },
-  videoPlayer: {
-    ...StyleSheet.absoluteFillObject,
   },
 });
 

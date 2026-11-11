@@ -1,0 +1,33 @@
+diff --git a/node_modules/@react-navigation/stack/lib/module/views/Stack/Card.js b/node_modules/@react-navigation/stack/lib/module/views/Stack/Card.js
+index b680e64..41d005c 100644
+--- a/node_modules/@react-navigation/stack/lib/module/views/Stack/Card.js
++++ b/node_modules/@react-navigation/stack/lib/module/views/Stack/Card.js
+@@ -2,7 +2,8 @@
+ 
+ import Color from 'color';
+ import * as React from 'react';
+-import { Animated, InteractionManager, Platform, StyleSheet, View } from 'react-native';
++import { Animated, Platform, StyleSheet, View } from 'react-native';
++import InteractionManager from 'react-native/Libraries/Interaction/InteractionManager';
+ import useLatestCallback from 'use-latest-callback';
+ import { CardAnimationContext } from "../../utils/CardAnimationContext.js";
+ import { gestureActivationCriteria } from "../../utils/gestureActivationCriteria.js";
+diff --git a/node_modules/@react-navigation/stack/src/views/Stack/Card.tsx b/node_modules/@react-navigation/stack/src/views/Stack/Card.tsx
+index 5b600c7..471fb40 100755
+--- a/node_modules/@react-navigation/stack/src/views/Stack/Card.tsx
++++ b/node_modules/@react-navigation/stack/src/views/Stack/Card.tsx
+@@ -3,13 +3,13 @@ import Color from 'color';
+ import * as React from 'react';
+ import {
+   Animated,
+-  InteractionManager,
+   Platform,
+   type StyleProp,
+   StyleSheet,
+   View,
+   type ViewStyle,
+ } from 'react-native';
++import InteractionManager from 'react-native/Libraries/Interaction/InteractionManager';
+ import type { EdgeInsets } from 'react-native-safe-area-context';
+ import useLatestCallback from 'use-latest-callback';
+ 

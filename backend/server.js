@@ -12,11 +12,12 @@ const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 const LIB_ID = process.env.BUNNY_LIBRARY_ID;
 const STREAM_KEY = process.env.BUNNY_STREAM_API_KEY;
 const CDN_HOST = (process.env.BUNNY_CDN_HOST || '').replace(/\/$/, '');
+const BUNNY_WEBHOOK_TOKEN = (process.env.BUNNY_WEBHOOK_TOKEN || '').trim();
 const FIREBASE_AUTH_REQUIRED = String(process.env.FIREBASE_AUTH_REQUIRED || 'true').toLowerCase() !== 'false';
 const UPLOAD_TIMEOUT_MS = Number(process.env.BUNNY_UPLOAD_TIMEOUT_MS || 10 * 60 * 1000);
+const BUNNY_GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 if (!LIB_ID || !STREAM_KEY || !CDN_HOST) {
-  // eslint-disable-next-line no-console
   console.error('[Config] Missing required Bunny env vars. Check .env');
 }
 
@@ -38,10 +39,8 @@ if (FIREBASE_AUTH_REQUIRED) {
         try {
           const parsed = JSON.parse(serviceAccountJson);
           credential = admin.credential.cert(parsed);
-          // eslint-disable-next-line no-console
           console.log('[Auth] Using FIREBASE_SERVICE_ACCOUNT env for credentials.');
         } catch (parseErr) {
-          // eslint-disable-next-line no-console
           console.warn('[Auth] Failed to parse FIREBASE_SERVICE_ACCOUNT JSON, falling back to other methods.', parseErr);
         }
       }
@@ -57,7 +56,6 @@ if (FIREBASE_AUTH_REQUIRED) {
             // Replace literal '\n' with real newlines if the key is stored in a single-line env var.
             privateKey: privateKey.replace(/\\n/g, '\n'),
           });
-          // eslint-disable-next-line no-console
           console.log('[Auth] Using FIREBASE_PROJECT_ID / FIREBASE_CLIENT_EMAIL / FIREBASE_PRIVATE_KEY env vars for credentials.');
         }
       }
@@ -67,7 +65,6 @@ if (FIREBASE_AUTH_REQUIRED) {
       } else {
         // As a last resort, rely on default application credentials (e.g. GOOGLE_APPLICATION_CREDENTIALS).
         admin.initializeApp();
-        // eslint-disable-next-line no-console
         console.log('[Auth] Initialized firebase-admin with default application credentials.');
       }
     }
@@ -81,26 +78,30 @@ if (FIREBASE_AUTH_REQUIRED) {
       return await admin.auth().verifyIdToken(token);
     };
     authReady = true;
-    // eslint-disable-next-line no-console
     console.log('[Auth] Firebase Admin initialized.');
   } catch (e) {
-    // eslint-disable-next-line no-console
     console.warn('[Auth] Failed to initialize firebase-admin. Set FIREBASE_AUTH_REQUIRED=false to bypass during local dev.', e);
   }
 }
 
 const app = express();
+app.disable('x-powered-by');
 // Parse JSON for non-multipart endpoints (e.g., webhooks)
 app.use(express.json({ limit: '1mb' }));
 
-// Basic rate limiting to protect upload and webhook endpoints
-const limiter = rateLimit({
+const uploadLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 200, // limit each IP to 200 requests per window
+  max: 120,
   standardHeaders: true,
   legacyHeaders: false,
 });
-app.use(limiter);
+
+const webhookLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // Multer temp storage with simple video-only filter
 const upload = multer({
@@ -137,27 +138,90 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 30000) {
   }
 }
 
+function normalizeToken(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function getWebhookTokenFromRequest(req) {
+  return (
+    normalizeToken(req.query?.token) ||
+    normalizeToken(req.query?.secret) ||
+    normalizeToken(req.get('x-orbita-webhook-token')) ||
+    normalizeToken(req.get('x-webhook-token'))
+  );
+}
+
+function isValidBunnyGuid(value) {
+  return typeof value === 'string' && BUNNY_GUID_PATTERN.test(value.trim());
+}
+
+function normalizeWebhookPayload(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return null;
+  }
+
+  const event = typeof payload.event === 'string' ? payload.event.trim() : '';
+  const videoGuid = typeof payload.videoGuid === 'string' ? payload.videoGuid.trim() : '';
+  const status = payload.status;
+
+  return {
+    event: event || 'unknown',
+    videoGuid: videoGuid || null,
+    status:
+      typeof status === 'string' || typeof status === 'number'
+        ? status
+        : null,
+    message:
+      typeof payload.message === 'string' && payload.message.trim()
+        ? payload.message.trim().slice(0, 200)
+        : null,
+  };
+}
+
 app.get('/health', (req, res) => {
   res.json({ ok: true });
 });
 
+app.head('/health', (req, res) => {
+  res.status(200).end();
+});
+
 // Optional: Bunny webhook receiver (set this URL in Bunny dashboard)
-app.post('/bunny/webhook', async (req, res) => {
+app.post('/bunny/webhook', webhookLimiter, async (req, res) => {
   try {
-    // Example payload fields: event, videoGuid, status, message
-    const payload = req.body || {};
-    // eslint-disable-next-line no-console
-    console.log('[Webhook] Bunny event', payload);
-    // TODO: verify signature if configured; update DB if needed.
-    return res.status(200).json({ ok: true });
+    if (BUNNY_WEBHOOK_TOKEN) {
+      const requestToken = getWebhookTokenFromRequest(req);
+      if (!requestToken || requestToken !== BUNNY_WEBHOOK_TOKEN) {
+        console.warn('[Webhook] rejected unauthorized Bunny webhook request');
+        return res.status(401).json({ error: 'Invalid webhook token' });
+      }
+    }
+
+    const payload = normalizeWebhookPayload(req.body);
+    if (!payload) {
+      return res.status(400).json({ error: 'Invalid webhook payload' });
+    }
+
+    if (payload.videoGuid && !isValidBunnyGuid(payload.videoGuid)) {
+      return res.status(400).json({ error: 'Invalid videoGuid' });
+    }
+
+    console.log('[Webhook] Bunny event received', {
+      event: payload.event,
+      videoGuid: payload.videoGuid,
+      status: payload.status,
+      message: payload.message,
+    });
+
+    // Placeholder for future sync logic if video status needs to be persisted in Firestore.
+    return res.status(202).json({ ok: true });
   } catch (e) {
-    // eslint-disable-next-line no-console
     console.error('[Webhook] failed', e);
     return res.status(500).json({ error: String(e) });
   }
 });
 
-app.post('/bunny/upload', upload.single('file'), async (req, res) => {
+app.post('/bunny/upload', uploadLimiter, upload.single('file'), async (req, res) => {
   const tempPath = req.file?.path;
   try {
     if (FIREBASE_AUTH_REQUIRED) {
@@ -172,7 +236,6 @@ app.post('/bunny/upload', upload.single('file'), async (req, res) => {
           ? Number(authError.status)
           : 0;
         const status = explicitStatus === 401 || explicitStatus === 403 ? explicitStatus : 401;
-        // eslint-disable-next-line no-console
         console.warn('[Upload] auth failed', { status, authMessage });
         return res.status(status).json({ error: 'Invalid or expired auth token' });
       }
@@ -182,7 +245,8 @@ app.post('/bunny/upload', upload.single('file'), async (req, res) => {
       return res.status(400).json({ error: 'file required' });
     }
     const titleRaw = typeof req.body.title === 'string' ? req.body.title : '';
-    const title = (titleRaw || `Upload ${new Date().toISOString()}`).trim();
+    const normalizedTitle = (titleRaw || `Upload ${new Date().toISOString()}`).trim();
+    const title = normalizedTitle.slice(0, 120);
 
     // 1) Create video entry
     const createResp = await fetchWithTimeout(`${PRIMARY_BASE}/${LIB_ID}/videos`, {
@@ -234,7 +298,6 @@ app.post('/bunny/upload', upload.single('file'), async (req, res) => {
     const inferredAuthFailure =
       /authorization|token|decode|auth|unauth/i.test(message) && explicitStatus !== 408;
     const status = explicitStatus || (inferredAuthFailure ? 401 : 500);
-    // eslint-disable-next-line no-console
     console.error('[Upload] failure', e);
     return res.status(status || 500).json({ error: message });
   } finally {
@@ -245,6 +308,5 @@ app.post('/bunny/upload', upload.single('file'), async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  // eslint-disable-next-line no-console
   console.log(`[Server] Bunny upload API listening on :${PORT}`);
 });

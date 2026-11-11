@@ -1,0 +1,22 @@
+diff --git a/node_modules/@react-native-community/checkbox/android/build.gradle b/node_modules/@react-native-community/checkbox/android/build.gradle
+index 743c7d1..3b3a868 100644
+--- a/node_modules/@react-native-community/checkbox/android/build.gradle
++++ b/node_modules/@react-native-community/checkbox/android/build.gradle
+@@ -43,7 +43,7 @@ def supportsNamespace() {
+ 
+ android {
+     if (supportsNamespace()) {
+-        namespace "com.reactnativecommunity.checkbox"
++        namespace = "com.reactnativecommunity.checkbox"
+     }
+     compileSdkVersion getExtOrIntegerDefault('compileSdkVersion')
+     buildToolsVersion getExtOrDefault('buildToolsVersion')
+@@ -55,7 +55,7 @@ android {
+     }
+ 
+     lintOptions {
+-        abortOnError false
++        abortOnError = false
+     }
+ }
+ 

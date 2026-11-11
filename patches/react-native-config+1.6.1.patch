@@ -1,0 +1,49 @@
+diff --git a/node_modules/react-native-config/android/build.gradle b/node_modules/react-native-config/android/build.gradle
+index 2d03393..fbce1e6 100644
+--- a/node_modules/react-native-config/android/build.gradle
++++ b/node_modules/react-native-config/android/build.gradle
+@@ -59,7 +59,7 @@ android {
+         }
+     }
+     lintOptions {
+-        abortOnError false
++        abortOnError = false
+     }
+ 
+     sourceSets.main {
+diff --git a/node_modules/react-native-config/android/src/main/java/com/lugg/RNCConfig/MapConverter.java b/node_modules/react-native-config/android/src/main/java/com/lugg/RNCConfig/MapConverter.java
+index d52c66a..9d5271e 100644
+--- a/node_modules/react-native-config/android/src/main/java/com/lugg/RNCConfig/MapConverter.java
++++ b/node_modules/react-native-config/android/src/main/java/com/lugg/RNCConfig/MapConverter.java
+@@ -29,7 +29,8 @@ class MapConverter {
+     } else if (value instanceof Integer) {
+       map.putInt(key, (Integer) value);
+     } else if (value instanceof Long) {
+-      map.putLong(key, (Long) value);
++      // WritableMap does not expose putLong; store as double to preserve magnitude.
++      map.putDouble(key, ((Long) value).doubleValue());
+     } else if (value instanceof Double) {
+       map.putDouble(key, (Double) value);
+     } else if (value instanceof Float) {
+diff --git a/node_modules/react-native-config/android/src/main/java/com/lugg/RNCConfig/RNCConfigPackage.java b/node_modules/react-native-config/android/src/main/java/com/lugg/RNCConfig/RNCConfigPackage.java
+index 9ddb65f..1a7055d 100644
+--- a/node_modules/react-native-config/android/src/main/java/com/lugg/RNCConfig/RNCConfigPackage.java
++++ b/node_modules/react-native-config/android/src/main/java/com/lugg/RNCConfig/RNCConfigPackage.java
+@@ -1,7 +1,7 @@
+ package com.lugg.RNCConfig;
+ 
+ import androidx.annotation.NonNull;
+-import com.facebook.react.BaseReactPackage;
++import com.facebook.react.TurboReactPackage;
+ import com.facebook.react.bridge.NativeModule;
+ import com.facebook.react.bridge.ReactApplicationContext;
+ import com.facebook.react.module.model.ReactModuleInfo;
+@@ -9,7 +9,7 @@ import com.facebook.react.module.model.ReactModuleInfoProvider;
+ import java.util.HashMap;
+ import java.util.Map;
+ 
+-public class RNCConfigPackage extends BaseReactPackage {
++public class RNCConfigPackage extends TurboReactPackage {
+ 
+   @Override
+   public NativeModule getModule(String name, @NonNull ReactApplicationContext reactContext) {

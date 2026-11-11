@@ -4,8 +4,10 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTranslation } from 'react-i18next';
 import { addReview, Review } from '../../src/services/firestoreService';
 import { authInstance as auth } from '../../src/firebaseConfig';
+import logger from '../../src/utils/logger';
+import type {AppStackScreenProps} from '../../src/navigation/types';
 
-const AddReviewScreen = ({ navigation, route }: { navigation: any, route: any }) => {
+const AddReviewScreen = ({navigation, route}: AppStackScreenProps<'AddReview'>) => {
   const { t } = useTranslation();
   const { spotId, mode = 'comment' } = route.params ?? {};
   const [rating, setRating] = useState(0);
@@ -66,7 +68,7 @@ const AddReviewScreen = ({ navigation, route }: { navigation: any, route: any })
       Alert.alert(t('alerts.reviewAdded'));
       navigation.goBack();
     } catch (error) {
-      console.error("Error adding review: ", error);
+      logger.error('Error adding review', error);
       Alert.alert(t('alerts.error'), t('alerts.addReviewError'));
     } finally {
       setLoading(false);

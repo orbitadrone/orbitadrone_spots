@@ -1,10 +1,9 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { StyleSheet, View, Text, TouchableOpacity, Modal, TextInput, ActivityIndicator, Alert, Image, Button, FlatList, Platform } from 'react-native';
-import MapView, { MapPressEvent, Region, MapType, Polygon } from 'react-native-maps';
-import RNFS from 'react-native-fs';
+import { StyleSheet, View, Text, TouchableOpacity, Modal, TextInput, ActivityIndicator, Alert, Image, FlatList } from 'react-native';
+import MapView, { MapPressEvent, Region, MapType } from 'react-native-maps';
 
 import MemoizedMapView from '../components/MemoizedMapView';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
 import { Rating } from 'react-native-ratings';
 import { useMap } from '../context/MapContext';
@@ -17,35 +16,51 @@ import {
   getUserProfile,
   UserProfile,
 } from '../../src/services/firestoreService';
+import {EventMarkerEntry, getPublicEventMarkers} from '../../src/services/eventService';
 import { navigateToSpotAfterAd } from '../../src/utils/spotsNavigation';
 import CustomButton from '../components/CustomButton';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Geolocation from '@react-native-community/geolocation';
 import CheckBox from '@react-native-community/checkbox';
 import { adManager } from '../../src/services/adManager';
-import RemoveAdsModal from '../components/RemoveAdsModal';
+import RewardedAdModal from '../components/RewardedAdModal';
 import { useAds } from '../context/AdContext';
 import { useAuthContext } from '../context/AuthContext';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { flightStylesOptions } from '../../src/constants/flightStyles';
 import { requestLocationPermission } from '../../src/utils/permissions';
+import { palette, radii, shadows } from '../../src/constants/theme';
+import logger from '../../src/utils/logger';
+import {
+  MARKER_VISIBILITY_HIDE_THRESHOLD,
+  MARKER_VISIBILITY_SHOW_THRESHOLD,
+  SearchResult,
+  arePilotMarkerListsEqual,
+  areRegionsSimilar,
+  buildFilteredPilots,
+  buildFilteredSpots,
+  buildPilotMarkerData,
+  buildPilotMarkersForMap,
+  buildSearchResults,
+  getSpotRegion,
+  parseMapSearch,
+} from '../features/map/mapScreenShared';
+import type {MainTabScreenNavigationProp, MainTabScreenProps} from '../../src/navigation/types';
 
-const areRegionsSimilar = (a: Region | null, b: Region, tolerance = 0.00001) => {
-  if (!a) {
-    return false;
-  }
-
-  return (
-    Math.abs(a.latitude - b.latitude) <= tolerance &&
-    Math.abs(a.longitude - b.longitude) <= tolerance &&
-    Math.abs(a.latitudeDelta - b.latitudeDelta) <= tolerance &&
-    Math.abs(a.longitudeDelta - b.longitudeDelta) <= tolerance
-  );
+const DEFAULT_MAP_REGION: Region = {
+  latitude: 41.3851,
+  longitude: 2.1734,
+  latitudeDelta: 0.0922,
+  longitudeDelta: 0.0421,
 };
+const MAP_FOCUS_REFRESH_MIN_INTERVAL_MS = 5000;
 
 export default function MapScreen() {
   const { t, i18n } = useTranslation();
-  const navigation = useNavigation();
+  const navigation = useNavigation<MainTabScreenNavigationProp<'Map'>>();
+  const route = useRoute<MainTabScreenProps<'Map'>['route']>();
+  const insets = useSafeAreaInsets();
   const { areAdsDisabled, disableAdsForSession } = useAds();
   const {
     region,
@@ -55,7 +70,14 @@ export default function MapScreen() {
   } = useMap();
 
   const mapRef = useRef<MapView>(null);
+  const lastHandledEventFocusRef = useRef<number | null>(null);
   const isAnimatingMap = useRef(false); // Nueva referencia para controlar la animación del mapa
+  const lastSpotsFetchStartedAtRef = useRef(0);
+  const lastPilotMarkersFetchStartedAtRef = useRef(0);
+  const lastEventMarkersFetchStartedAtRef = useRef(0);
+  const isFetchingSpotsRef = useRef(false);
+  const isFetchingPilotMarkersRef = useRef(false);
+  const isFetchingEventMarkersRef = useRef(false);
   const [spots, setSpots] = useState<Spot[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -69,63 +91,27 @@ export default function MapScreen() {
   const [pilotProfile, setPilotProfile] = useState<UserProfile | null>(null);
   const [isPilotProfileLoading, setPilotProfileLoading] = useState(true);
   const [pilotMarkers, setPilotMarkers] = useState<PilotMarkerMapEntry[]>([]);
+  const [eventMarkers, setEventMarkers] = useState<EventMarkerEntry[]>([]);
   const [showMapInstructions, setShowMapInstructions] = useState(true);
-  const [spainGeoData, setSpainGeoData] = useState<any>(null); // New state for GeoJSON data
 
-  const isValidPilotMarker = (marker?: { latitude?: number; longitude?: number }) =>
-    Boolean(
-      marker &&
-        typeof marker.latitude === 'number' &&
-        typeof marker.longitude === 'number',
-    );
-
-  const pilotMarker = pilotProfile?.pilotMarker;
-  const pilotMarkerData = useMemo(() => {
-    return isValidPilotMarker(pilotMarker) && pilotProfile?.showPilotMarker !== false
-      ? {
-          latitude: pilotMarker!.latitude,
-          longitude: pilotMarker!.longitude,
-          photoUrl: pilotProfile?.profilePictureUrl,
-        }
-      : null;
-  }, [pilotMarker, pilotProfile?.showPilotMarker, pilotProfile?.profilePictureUrl]);
+  const pilotMarkerData = useMemo(
+    () => buildPilotMarkerData(pilotProfile),
+    [pilotProfile],
+  );
 
   const pilotMarkersForMap = useMemo(() => {
-    if (!pilotMarkerData || !user?.uid) {
-      return pilotMarkers;
-    }
-    const existingIndex = pilotMarkers.findIndex(
-      marker => marker.id === user.uid,
-    );
-    if (existingIndex !== -1) {
-      const updated = [...pilotMarkers];
-      updated[existingIndex] = {
-        ...updated[existingIndex],
-        latitude: pilotMarkerData.latitude,
-        longitude: pilotMarkerData.longitude,
-        photoUrl:
-          pilotMarkerData.photoUrl ?? updated[existingIndex].photoUrl ?? null,
-      };
-      return updated;
-    }
-    return [
-      ...pilotMarkers,
-      {
-        id: user.uid,
-        latitude: pilotMarkerData.latitude,
-        longitude: pilotMarkerData.longitude,
-        photoUrl: pilotMarkerData.photoUrl ?? null,
-      },
-    ];
+    return buildPilotMarkersForMap({
+      pilotMarkerData,
+      pilotMarkers,
+      userId: user?.uid,
+    });
   }, [pilotMarkers, pilotMarkerData, user?.uid]);
 
   // --- Estados para el buscador y filtro ---
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedStyles, setSelectedStyles] = useState<string[]>([]);
   const [isFilterModalVisible, setFilterModalVisible] = useState(false);
-  const [displaySpots, setDisplaySpots] = useState<Spot[]>([]);
-  const [displayPilots, setDisplayPilots] = useState<PilotMarkerMapEntry[]>([]);
-  const [isRemoveAdsModalVisible, setRemoveAdsModalVisible] = useState(false);
+  const [isRewardedAdModalVisible, setRewardedAdModalVisible] = useState(false);
   // --- Fin de estados para el buscador ---
 
   const animateToRegion = useCallback(
@@ -141,27 +127,8 @@ export default function MapScreen() {
     [setRegion],
   );
 
-  const normalizeTag = useCallback((value: string) => {
-    const cleaned = value.replace(/^#+/, '').trim().toLowerCase();
-    return cleaned.replace(/\s+/g, '');
-  }, []);
-
-  const parsedSearch = useMemo(() => {
-    const tokens = searchQuery.split(/\s+/).map(token => token.trim()).filter(Boolean);
-    const tags = tokens
-      .filter(token => token.startsWith('#'))
-      .map(token => normalizeTag(token))
-      .filter(Boolean);
-    const terms = tokens
-      .filter(token => !token.startsWith('#'))
-      .map(token => token.toLowerCase());
-    return {
-      tags,
-      terms,
-      hasSearch: tokens.length > 0,
-      plainQuery: terms.join(' ').trim(),
-    };
-  }, [searchQuery, normalizeTag]);
+  const parsedSearch = useMemo(() => parseMapSearch(searchQuery), [searchQuery]);
+  const displayRegion = region ?? DEFAULT_MAP_REGION;
 
   const handleCenterOnUserLocation = useCallback(async () => {
     const hasPermission = await requestLocationPermission();
@@ -190,68 +157,30 @@ export default function MapScreen() {
           errorMessage += `\nError: ${geolocationError.message}`;
         }
         Alert.alert(t('alerts.error'), errorMessage);
-        animateToRegion({
-          latitude: 41.3851,
-          longitude: 2.1734,
-          latitudeDelta: 0.0922,
-          longitudeDelta: 0.0421,
-        });
+        animateToRegion(DEFAULT_MAP_REGION);
       },
       {enableHighAccuracy: false, timeout: 20000, maximumAge: 1000},
     );
-  }, [animateToRegion, setRegion, t]);
+  }, [animateToRegion, t]);
 
+  const displaySpots = useMemo(
+    () =>
+      buildFilteredSpots({
+        parsedSearch,
+        selectedStyles,
+        spots,
+      }),
+    [parsedSearch, selectedStyles, spots],
+  );
 
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      handleCenterOnUserLocation();
-    }, 100);
-
-    return () => clearTimeout(timer); // Limpiar el temporizador si el componente se desmonta
-  }, [handleCenterOnUserLocation]);
-
-  // --- Lógica de filtrado ---
-  useEffect(() => {
-    let spotsResult = [...spots];
-    const {hasSearch, terms, tags, plainQuery} = parsedSearch;
-    if (hasSearch) {
-      if (terms.length > 0) {
-        spotsResult = spotsResult.filter(spot => {
-          const haystack = `${spot.name} ${spot.address ?? ''} ${spot.description ?? ''}`.toLowerCase();
-          return terms.every(term => haystack.includes(term));
-        });
-      }
-      if (tags.length > 0) {
-        spotsResult = spotsResult.filter(spot => {
-          const spotTags = (spot.tags ?? []).map(value => normalizeTag(value));
-          return tags.every(tag => spotTags.includes(tag));
-        });
-      }
-    }
-
-    if (selectedStyles.length > 0) {
-      spotsResult = spotsResult.filter(
-        spot =>
-          spot.flightStyles && spot.flightStyles.some(style => selectedStyles.includes(style)),
-      );
-    }
-    setDisplaySpots(
-      hasSearch || selectedStyles.length > 0 ? spotsResult : spots,
-    );
-
-    if (plainQuery) {
-      const pilotMatches = pilotMarkersForMap.filter(marker => {
-        const lowercasedQuery = plainQuery.toLowerCase();
-        const nameMatch = marker.displayName?.toLowerCase().includes(lowercasedQuery);
-        const regionMatch = marker.cityRegion?.toLowerCase().includes(lowercasedQuery);
-        return Boolean(nameMatch || regionMatch);
-      });
-      setDisplayPilots(pilotMatches);
-    } else {
-      setDisplayPilots([]);
-    }
-  }, [parsedSearch, selectedStyles, spots, pilotMarkersForMap, normalizeTag]);
-  // --- Fin de la lógica de filtrado ---
+  const displayPilots = useMemo(
+    () =>
+      buildFilteredPilots({
+        parsedSearch,
+        pilotMarkers: pilotMarkersForMap,
+      }),
+    [parsedSearch, pilotMarkersForMap],
+  );
 
   useEffect(() => {
     if (!user) {
@@ -268,7 +197,7 @@ export default function MapScreen() {
           setPilotProfile(data);
         }
       } catch (err) {
-        console.error('[MapScreen] failed to fetch user profile', err);
+        logger.error('[MapScreen] failed to fetch user profile', err);
       } finally {
         if (!cancelled) {
           setPilotProfileLoading(false);
@@ -283,30 +212,6 @@ export default function MapScreen() {
 
   
 
-      useEffect(() => {
-    const getAssetPath = (filename: string) => {
-      if (Platform.OS === 'android') {
-        return `file:///android_asset/${filename}`;
-      }
-      // For iOS, files in the main bundle are usually accessed directly by name
-      // or through NSBundle.mainBundle().pathForResource.
-      // For simplicity here, we'll assume direct access if bundled correctly.
-      // For complex cases, a native bridge might be needed.
-      return filename;
-    };
-
-    const loadSpainGeo = async () => {
-      try {
-        const path = getAssetPath('spain.json');
-        const content = await RNFS.readFile(path, 'utf8');
-        setSpainGeoData(JSON.parse(content));
-      } catch (error) {
-        console.error('Error loading spain.json:', error);
-      }
-    };
-    loadSpainGeo();
-  }, []);
-
   const onRegionChangeComplete = (newRegion: Region) => {
     if (isAnimatingMap.current) {
       return;
@@ -314,15 +219,11 @@ export default function MapScreen() {
     if (!areRegionsSimilar(region, newRegion)) {
       setRegion(newRegion);
     }
-    const zoomThreshold = 0.25;
-    if (newRegion.latitudeDelta < zoomThreshold) {
-      if (!showSpotsOnZoom) {
-        setShowSpotsOnZoom(true);
-      }
-    } else {
-      if (showSpotsOnZoom) {
-        setShowSpotsOnZoom(false);
-      }
+    // Use hysteresis to avoid toggling markers on minor zoom jitter
+    if (showSpotsOnZoom && newRegion.latitudeDelta > MARKER_VISIBILITY_HIDE_THRESHOLD) {
+      setShowSpotsOnZoom(false);
+    } else if (!showSpotsOnZoom && newRegion.latitudeDelta < MARKER_VISIBILITY_SHOW_THRESHOLD) {
+      setShowSpotsOnZoom(true);
     }
   };
 
@@ -335,41 +236,109 @@ export default function MapScreen() {
     }
   }, [selectedSpot, setSelectedCoordinate]);
 
-  const handleSpotPress = useCallback((spot: any, event: any) => {
-    event.stopPropagation();
+  const handleSpotPress = useCallback((spot: any, event?: { stopPropagation?: () => void }) => {
+    event?.stopPropagation?.();
     setSelectedSpot(spot);
   }, []);
 
-  const fetchSpots = useCallback(async () => {
+  const fetchSpots = useCallback(async ({force = false}: {force?: boolean} = {}) => {
+    const now = Date.now();
+    if (!force) {
+      if (isFetchingSpotsRef.current) {
+        logger.log('[MapScreen] skipped spots fetch because one is already in flight');
+        return;
+      }
+
+      const elapsedMs = now - lastSpotsFetchStartedAtRef.current;
+      if (elapsedMs < MAP_FOCUS_REFRESH_MIN_INTERVAL_MS) {
+        logger.log('[MapScreen] skipped spots focus refresh', {
+          elapsedMs,
+          minIntervalMs: MAP_FOCUS_REFRESH_MIN_INTERVAL_MS,
+        });
+        return;
+      }
+    }
+
+    isFetchingSpotsRef.current = true;
+    lastSpotsFetchStartedAtRef.current = now;
     setLoading(true);
     setError(null);
     try {
       const fetchedSpots = await getSpots();
-      console.log('MapScreen: fetched spots', fetchedSpots.length);
-      if (fetchedSpots.length > 0) {
-        console.log('MapScreen: first spot', JSON.stringify(fetchedSpots[0]));
-      }
+      logger.log('MapScreen: fetched spots', fetchedSpots.length);
       setSpots(Array.isArray(fetchedSpots) ? fetchedSpots : []);
     } catch (err) {
-      console.error("Error fetching spots:", err);
+      logger.error('Error fetching spots', err);
       setError(t('alerts.fetchSpotError'));
       setSpots([]); // Asegurarse de que spots sea un array en caso de error
     } finally {
+      isFetchingSpotsRef.current = false;
       setLoading(false);
     }
   }, [t]);
 
-  const fetchPilotMarkers = useCallback(async () => {
+  const fetchPilotMarkers = useCallback(async ({force = false}: {force?: boolean} = {}) => {
+    const now = Date.now();
+    if (!force) {
+      if (isFetchingPilotMarkersRef.current) {
+        logger.log('[MapScreen] skipped pilot markers fetch because one is already in flight');
+        return;
+      }
+
+      const elapsedMs = now - lastPilotMarkersFetchStartedAtRef.current;
+      if (elapsedMs < MAP_FOCUS_REFRESH_MIN_INTERVAL_MS) {
+        logger.log('[MapScreen] skipped pilot markers focus refresh', {
+          elapsedMs,
+          minIntervalMs: MAP_FOCUS_REFRESH_MIN_INTERVAL_MS,
+        });
+        return;
+      }
+    }
+
+    isFetchingPilotMarkersRef.current = true;
+    lastPilotMarkersFetchStartedAtRef.current = now;
     try {
       const markers = await getPublicPilotMarkers();
-      setPilotMarkers(markers);
+      setPilotMarkers(prev => (arePilotMarkerListsEqual(prev, markers) ? prev : markers));
     } catch (err) {
-      console.error('[MapScreen] failed to fetch pilot markers', err);
+      logger.error('[MapScreen] failed to fetch pilot markers', err);
+    } finally {
+      isFetchingPilotMarkersRef.current = false;
+    }
+  }, []);
+
+  const fetchEventMarkers = useCallback(async ({force = false}: {force?: boolean} = {}) => {
+    const now = Date.now();
+    if (!force) {
+      if (isFetchingEventMarkersRef.current) {
+        logger.log('[MapScreen] skipped event markers fetch because one is already in flight');
+        return;
+      }
+
+      const elapsedMs = now - lastEventMarkersFetchStartedAtRef.current;
+      if (elapsedMs < MAP_FOCUS_REFRESH_MIN_INTERVAL_MS) {
+        logger.log('[MapScreen] skipped event markers focus refresh', {
+          elapsedMs,
+          minIntervalMs: MAP_FOCUS_REFRESH_MIN_INTERVAL_MS,
+        });
+        return;
+      }
+    }
+
+    isFetchingEventMarkersRef.current = true;
+    lastEventMarkersFetchStartedAtRef.current = now;
+    try {
+      const markers = await getPublicEventMarkers();
+      setEventMarkers(markers);
+    } catch (err) {
+      logger.error('[MapScreen] failed to fetch event markers', err);
+    } finally {
+      isFetchingEventMarkersRef.current = false;
     }
   }, []);
 
   useEffect(() => {
-    fetchSpots();
+    fetchSpots({force: true});
     const unsubscribe = navigation.addListener('focus', () => {
       fetchSpots();
     });
@@ -377,23 +346,25 @@ export default function MapScreen() {
   }, [navigation, fetchSpots]);
 
   useEffect(() => {
-    fetchPilotMarkers();
-    const unsubscribe = navigation.addListener('focus', fetchPilotMarkers);
+    fetchPilotMarkers({force: true});
+    const unsubscribe = navigation.addListener('focus', () => {
+      fetchPilotMarkers();
+    });
     return unsubscribe;
   }, [navigation, fetchPilotMarkers]);
+
+  useEffect(() => {
+    fetchEventMarkers({force: true});
+    const unsubscribe = navigation.addListener('focus', () => {
+      fetchEventMarkers();
+    });
+    return unsubscribe;
+  }, [navigation, fetchEventMarkers]);
 
 
 
   const searchResults = useMemo<SearchResult[]>(() => {
-    const pilotEntries = displayPilots.map(pilot => ({
-      type: 'pilot' as const,
-      pilot,
-    }));
-    const spotEntries = displaySpots.map(spot => ({
-      type: 'spot' as const,
-      spot,
-    }));
-    return [...pilotEntries, ...spotEntries];
+    return buildSearchResults(displayPilots, displaySpots);
   }, [displayPilots, displaySpots]);
 
   const handleCalloutPress = (spotId: string) => {
@@ -411,29 +382,10 @@ export default function MapScreen() {
   };
 
   const handleGoToSpot = (spot: Spot) => {
-    const coordinates: any = (spot as any).coordinates;
-    const latitude =
-      coordinates?.latitude ??
-      coordinates?._latitude ??
-      (spot as any).latitude ??
-      (spot as any).lat;
-    const longitude =
-      coordinates?.longitude ??
-      coordinates?._longitude ??
-      (spot as any).longitude ??
-      (spot as any).lng ??
-      (spot as any).lon;
-
-    if (typeof latitude !== 'number' || typeof longitude !== 'number') {
+    const spotRegion = getSpotRegion(spot);
+    if (!spotRegion) {
       return;
     }
-
-    const spotRegion = {
-      latitude,
-      longitude,
-      latitudeDelta: 0.01,
-      longitudeDelta: 0.01,
-    };
     animateToRegion(spotRegion, 1000);
     setSelectedSpot(spot); // Seleccionar el spot para mostrar el callout
     
@@ -447,7 +399,7 @@ export default function MapScreen() {
       if (!markerUserId) {
         return;
       }
-      navigation.navigate('UserProfile' as never, {userId: markerUserId} as never);
+      navigation.navigate('UserProfile', {userId: markerUserId});
     },
     [navigation],
   );
@@ -467,89 +419,113 @@ export default function MapScreen() {
     [animateToRegion, handlePilotMarkerPress],
   );
 
-  const holes = useMemo(() => {
-    if (!spainGeoData) {
-      return [];
+  const handleEventMarkerPress = useCallback(
+    (eventId?: string) => {
+      if (!eventId) {
+        return;
+      }
+      navigation.navigate('EventDetail', {eventId});
+    },
+    [navigation],
+  );
+
+  useEffect(() => {
+    const focusRequestedAt = route.params?.focusRequestedAt;
+    if (
+      typeof focusRequestedAt !== 'number' ||
+      lastHandledEventFocusRef.current === focusRequestedAt
+    ) {
+      return;
     }
-    const spainFeature = spainGeoData.features.find((f: any) => f.id === 'ESP');
-    if (!spainFeature || spainFeature.geometry.type !== 'MultiPolygon') {
-      return [];
+
+    const latitude = route.params?.focusLatitude;
+    const longitude = route.params?.focusLongitude;
+    if (typeof latitude === 'number' && typeof longitude === 'number') {
+      lastHandledEventFocusRef.current = focusRequestedAt;
+      animateToRegion(
+        {
+          latitude,
+          longitude,
+          latitudeDelta: 0.02,
+          longitudeDelta: 0.02,
+        },
+        700,
+      );
+      return;
     }
-    return spainFeature.geometry.coordinates.flatMap((polygon: any) =>
-      polygon.map((ring: any) =>
-        ring.map((coord: any) => ({
-          latitude: coord[1],
-          longitude: coord[0],
-        })),
-      ),
+
+    const focusEventId = route.params?.focusEventId;
+    if (!focusEventId) {
+      return;
+    }
+
+    const marker = eventMarkers.find(entry => entry.id === focusEventId);
+    if (!marker) {
+      return;
+    }
+
+    lastHandledEventFocusRef.current = focusRequestedAt;
+    animateToRegion(
+      {
+        latitude: marker.latitude,
+        longitude: marker.longitude,
+        latitudeDelta: 0.02,
+        longitudeDelta: 0.02,
+      },
+      700,
     );
-  }, [spainGeoData]);
+  }, [
+    animateToRegion,
+    eventMarkers,
+    route.params?.focusEventId,
+    route.params?.focusLatitude,
+    route.params?.focusLongitude,
+    route.params?.focusRequestedAt,
+  ]);
 
   return (
     <View style={styles.container}>
-      {console.log('MapScreen render', {showSpotsOnZoom, displayLength: displaySpots.length, region})}
-      <RemoveAdsModal
-        isVisible={isRemoveAdsModalVisible}
-        onClose={() => setRemoveAdsModalVisible(false)}
+      <RewardedAdModal
+        isVisible={isRewardedAdModalVisible}
+        onClose={() => setRewardedAdModalVisible(false)}
         onWatchAd={() => {
-          setRemoveAdsModalVisible(false);
+          setRewardedAdModalVisible(false);
           adManager.showRewardedAd(
             () => {
               // El usuario ha ganado la recompensa
               disableAdsForSession();
               Alert.alert(
-                t('removeAds.rewardEarnedTitle'),
-                t('removeAds.rewardEarnedMessage'),
+                t('rewardedAds.rewardEarnedTitle'),
+                t('rewardedAds.rewardEarnedMessage'),
               );
             },
             () => {
-              Alert.alert(t('alerts.error'), t('removeAds.rewardNotReady'));
+              Alert.alert(t('alerts.error'), t('rewardedAds.rewardNotReady'));
             },
           );
         }}
       />
-      {!region ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" />
-          <Text>{t('map.gettingLocation')}</Text>
-        </View>
-      ) : (
-        <MemoizedMapView
-          mapRef={mapRef}
-          region={region}
-          onRegionChangeComplete={onRegionChangeComplete}
-          onPress={handleMapPress}
-          showsUserLocation
-          showsCompass
-          mapType={mapType}
-          selectedCoordinate={selectedCoordinate}
-          spots={spots}
-          showAirZones={false}
-          airZones={null}
-          handleSpotPress={(spot, event) => handleSpotPress(spot, event)}
-          pilotMarkers={pilotMarkersForMap}
-          handlePilotMarkerPress={handlePilotMarkerPress}
-          showMarkers={showSpotsOnZoom}
-        >
-          {spainGeoData && (
-            <Polygon
-              coordinates={[
-                { latitude: 90, longitude: -180 },
-                { latitude: 90, longitude: 0 },
-                { latitude: 90, longitude: 180 },
-                { latitude: -90, longitude: 180 },
-                { latitude: -90, longitude: 0 },
-                { latitude: -90, longitude: -180 },
-              ]}
-              holes={holes}
-              fillColor="rgba(0,0,0,0.5)"
-              strokeWidth={0}
-            />
-          )}
-        </MemoizedMapView>
-      )}
+      <MemoizedMapView
+        mapRef={mapRef}
+        region={displayRegion}
+        onRegionChangeComplete={onRegionChangeComplete}
+        onPress={handleMapPress}
+        showsUserLocation
+        showsCompass
+        mapType={mapType}
+        selectedCoordinate={selectedCoordinate}
+        spots={spots}
+        showAirZones={false}
+        airZones={null}
+        handleSpotPress={handleSpotPress}
+        pilotMarkers={pilotMarkersForMap}
+        handlePilotMarkerPress={handlePilotMarkerPress}
+        eventMarkers={eventMarkers}
+        handleEventMarkerPress={handleEventMarkerPress}
+        showMarkers={showSpotsOnZoom}
+      />
 
-      <View style={styles.headerContainer}>
+      <View style={[styles.headerContainer, { top: insets.top + 10 }]}>
         <View style={styles.sideControlsContainer}>
           <TouchableOpacity style={styles.controlButton} onPress={() => setMapType(mapType === 'standard' ? 'satellite' : 'standard')}>
             <Icon name="satellite-variant" size={24} color="#333" />
@@ -557,8 +533,11 @@ export default function MapScreen() {
           <TouchableOpacity style={styles.controlButton} onPress={handleCenterOnUserLocation}>
             <Icon name="crosshairs-gps" size={24} color="#333" />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.controlButton} onPress={() => setRemoveAdsModalVisible(true)}>
-            <Icon name="crown-outline" size={24} color="#333" />
+          <TouchableOpacity
+            style={styles.controlButton}
+            accessibilityLabel={t('rewardedAds.title')}
+            onPress={() => setRewardedAdModalVisible(true)}>
+            <Icon name="play-circle-outline" size={24} color="#333" />
           </TouchableOpacity>
         </View>
         <View style={styles.searchContainer}>
@@ -641,13 +620,16 @@ export default function MapScreen() {
               title={t('map.createNewSpot')}
               onPress={() => {
                 setServiceMenuVisible(false);
-                navigation.navigate('AddSpot' as never, { coordinate: selectedCoordinate } as never);
+                navigation.navigate('AddSpot', { coordinate: selectedCoordinate });
               }}
             />
             <CustomButton
               title={t('map.cancel')}
               onPress={() => setServiceMenuVisible(false)}
-              style={{ marginTop: 10, backgroundColor: 'red' }}
+              variant="outline"
+              color="#e53935"
+              textColor="#e53935"
+              style={styles.modalSecondaryButton}
             />
           </View>
         </View>
@@ -662,7 +644,7 @@ export default function MapScreen() {
         <View style={styles.filterModalContainer}>
           <View style={styles.filterModalContent}>
             <TouchableOpacity style={styles.closeModalButton} onPress={() => setFilterModalVisible(false)}>
-              <Icon name="close" size={24} color="#333" />
+              <Icon name="close" size={24} color={palette.textPrimary} />
             </TouchableOpacity>
             <Text style={styles.modalTitle}>{t('map.filterByFlightStyle')}</Text>
             <View style={styles.checkboxGrid}>
@@ -670,7 +652,7 @@ export default function MapScreen() {
                 <View key={style} style={styles.checkboxContainer}>
                   <CheckBox
                     value={selectedStyles.includes(style)}
-                    tintColors={{ true: '#007BFF', false: '#888' }}
+                    tintColors={{ true: palette.highlight, false: palette.borderMuted }}
                     onValueChange={() => {
                       setSelectedStyles(prev => 
                         prev.includes(style) 
@@ -684,8 +666,17 @@ export default function MapScreen() {
               ))}
             </View>
             <View style={styles.filterActions}>
-              <Button title={t('map.clear')} onPress={() => setSelectedStyles([])} />
-              <Button title={t('map.apply')} onPress={() => setFilterModalVisible(false)} />
+              <CustomButton
+                title={t('map.clear')}
+                variant="outline"
+                style={styles.filterActionButtonSecondary}
+                onPress={() => setSelectedStyles([])}
+              />
+              <CustomButton
+                title={t('map.apply')}
+                style={styles.filterActionButton}
+                onPress={() => setFilterModalVisible(false)}
+              />
             </View>
           </View>
         </View>
@@ -746,16 +737,16 @@ export default function MapScreen() {
                     <Text style={styles.resultAddress} numberOfLines={1}>
                       {spotItem.address}
                     </Text>
-                    <View style={{flexDirection: 'row', alignItems: 'center'}}>
+                    <View style={styles.resultRatingRow}>
                       <Rating
                         type="star"
                         ratingCount={5}
                         imageSize={15}
                         readonly
                         startingValue={spotItem.averageRating}
-                        style={{paddingVertical: 2}}
+                        style={styles.resultRating}
                       />
-                      <Text style={{marginLeft: 5, color: 'gray'}}>({spotItem.reviewCount})</Text>
+                      <Text style={styles.resultReviewCount}>({spotItem.reviewCount})</Text>
                     </View>
                   </View>
                 </TouchableOpacity>
@@ -842,14 +833,12 @@ const styles = StyleSheet.create({
   searchContainer: {
     flex: 1,
     flexDirection: 'row',
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    borderRadius: 25,
+    backgroundColor: palette.backgroundLight,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: palette.borderLight,
     height: 50,
-    elevation: 5,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 2,
+    ...shadows.subtle,
     alignItems: 'center',
     paddingHorizontal: 15,
   },
@@ -857,7 +846,7 @@ const styles = StyleSheet.create({
     flex: 1,
     height: '100%',
     fontSize: 16,
-    color: '#000',
+    color: palette.textPrimary,
   },
   filterButton: {
     paddingLeft: 10,
@@ -867,17 +856,15 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   controlButton: {
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    backgroundColor: palette.backgroundCard,
+    borderWidth: 1,
+    borderColor: palette.borderLight,
     width: 50,
     height: 50,
-    borderRadius: 25,
+    borderRadius: radii.lg,
     justifyContent: 'center',
     alignItems: 'center',
-    elevation: 5,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 2,
+    ...shadows.subtle,
   },
   loadingOverlay: {
     position: 'absolute',
@@ -885,12 +872,12 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(248,250,252,0.9)',
     justifyContent: 'center',
     alignItems: 'center',
   },
   loadingText: {
-    color: 'white',
+    color: palette.textSecondary,
     marginTop: 10,
   },
   errorOverlay: {
@@ -934,6 +921,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontSize: 18,
     fontWeight: 'bold',
+    color: palette.textPrimary,
   },
   input: {
     height: 40,
@@ -950,20 +938,18 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.5)',
   },
   bottomSheetModalView: {
-    backgroundColor: 'white',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    backgroundColor: palette.backgroundCard,
+    borderTopLeftRadius: radii.lg,
+    borderTopRightRadius: radii.lg,
     paddingTop: 20, // Revert to standard padding
     paddingHorizontal: 20, // Keep horizontal padding
     paddingBottom: 20, // Keep bottom padding
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: -2,
-    },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 5,
+    borderWidth: 1,
+    borderColor: palette.borderLight,
+    ...shadows.subtle,
+  },
+  modalSecondaryButton: {
+    marginTop: 10,
   },
   fullScreenModalContainer: {
     flex: 1,
@@ -992,15 +978,13 @@ const styles = StyleSheet.create({
     left: '50%',
     marginLeft: -75,
     width: 150,
-    backgroundColor: 'white',
-    borderRadius: 10,
+    backgroundColor: palette.backgroundCard,
+    borderRadius: radii.lg,
     padding: 10,
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-    elevation: 5,
+    borderWidth: 1,
+    borderColor: palette.borderLight,
+    ...shadows.subtle,
   },
   calloutImage: {
     width: 80,
@@ -1013,21 +997,26 @@ const styles = StyleSheet.create({
     fontSize: 16,
     marginBottom: 2,
     textAlign: 'center',
+    color: palette.textPrimary,
   },
   calloutRating: {
     fontSize: 14,
     textAlign: 'center',
+    color: palette.textSecondary,
   },
   closeCalloutButton: {
     position: 'absolute',
     top: -10,
     right: -10,
-    backgroundColor: '#000',
-    borderRadius: 15,
+    backgroundColor: palette.backgroundCard,
+    borderRadius: radii.lg,
     width: 30,
     height: 30,
     justifyContent: 'center',
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: palette.borderLight,
+    ...shadows.subtle,
   },
   filterModalContainer: {
     flex: 1,
@@ -1036,10 +1025,13 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.5)',
   },
   filterModalContent: {
-    backgroundColor: 'white',
-    borderRadius: 10,
+    backgroundColor: palette.backgroundCard,
+    borderRadius: radii.lg,
     padding: 20,
-    width: '80%',
+    width: '85%',
+    borderWidth: 1,
+    borderColor: palette.borderLight,
+    ...shadows.subtle,
   },
   closeModalButton: {
     position: 'absolute',
@@ -1062,11 +1054,20 @@ const styles = StyleSheet.create({
   checkboxLabel: {
     marginLeft: 8,
     flex: 1,
+    color: palette.textPrimary,
   },
   filterActions: {
     flexDirection: 'row',
-    justifyContent: 'space-around',
+    justifyContent: 'space-between',
+    gap: 8,
     marginTop: 20,
+  },
+  filterActionButton: {
+    flex: 1,
+  },
+  filterActionButtonSecondary: {
+    flex: 1,
+    marginRight: 8,
   },
   resultsContainer: {
     position: 'absolute',
@@ -1114,6 +1115,17 @@ const styles = StyleSheet.create({
     marginLeft: 15,
     justifyContent: 'center'
   },
+  resultRatingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  resultRating: {
+    paddingVertical: 2,
+  },
+  resultReviewCount: {
+    marginLeft: 5,
+    color: 'gray',
+  },
   resultName: {
     fontSize: 16,
     fontWeight: 'bold',
@@ -1134,6 +1146,3 @@ const styles = StyleSheet.create({
     color: 'gray',
   },
 });
-type SearchResult =
-  | {type: 'pilot'; pilot: PilotMarkerMapEntry}
-  | {type: 'spot'; spot: Spot};

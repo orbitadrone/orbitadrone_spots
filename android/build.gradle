@@ -5,55 +5,138 @@ buildscript {
         compileSdkVersion = 36
         targetSdkVersion = 36
         ndkVersion = "27.1.12297006"
-        kotlinVersion = "1.9.24"
+        kotlinVersion = "2.1.20"
+    }
+    configurations.configureEach {
+        resolutionStrategy {
+            force "org.bouncycastle:bcprov-jdk18on:1.76"
+            force "org.bouncycastle:bcutil-jdk18on:1.76"
+            force "org.bouncycastle:bcpkix-jdk18on:1.76"
+            dependencySubstitution {
+                substitute module("org.bouncycastle:bcprov-jdk18on") using module("org.bouncycastle:bcprov-jdk18on:1.76")
+                substitute module("org.bouncycastle:bcutil-jdk18on") using module("org.bouncycastle:bcutil-jdk18on:1.76")
+                substitute module("org.bouncycastle:bcpkix-jdk18on") using module("org.bouncycastle:bcpkix-jdk18on:1.76")
+            }
+        }
     }
     repositories {
         google()
         mavenCentral()
     }
     dependencies {
-        classpath("com.android.tools.build:gradle:8.12.0")
-        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.24")
+        classpath("com.android.tools.build:gradle")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin")
         classpath("com.facebook.react:react-native-gradle-plugin")
-        classpath("com.google.gms:google-services:4.4.1")
+        classpath("com.google.gms:google-services:4.3.15")
+        classpath("com.google.firebase:firebase-crashlytics-gradle:2.9.9")
     }
 }
 
-plugins {
-    id "com.facebook.react.rootproject"
-}
-
-// Ensure all Kotlin compilation targets JDK 17 across subprojects
-subprojects { sp ->
-    // Configure Kotlin compile options early without afterEvaluate to avoid evaluation errors
-    tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
-        kotlinOptions {
-            jvmTarget = "17"
-            freeCompilerArgs += ["-Xjvm-default=all"]
-        }
+allprojects {
+    repositories {
+        mavenLocal()
+        google()
+        mavenCentral()
     }
-}
-
-// Workaround: Only disable WebView codegen when NOT using the New Architecture.
-// When newArchEnabled=false, react-native-webview's codegen isn't needed and may
-// fail on older toolchains, so we disable it. With newArchEnabled=true, we must
-// keep codegen enabled so that the native jni targets (e.g. react_codegen_RNCWebViewSpec)
-// and their CMake projects are generated correctly.
-subprojects { sp ->
-    if (sp.name == 'react-native-webview') {
-        // Read the global newArchEnabled flag from the root project / gradle.properties
-        def isNewArchEnabled = rootProject.hasProperty("newArchEnabled") &&
-                rootProject.newArchEnabled?.toString() == "true"
-
-        if (!isNewArchEnabled) {
-            sp.afterEvaluate {
-                sp.tasks.matching {
-                    it.name == 'generateCodegenArtifactsFromSchema' ||
-                    it.name == 'generateCodegenSchemaFromJavaScript'
-                }.configureEach { task ->
-                    task.enabled = false
-                }
+    configurations.configureEach { config ->
+        config.resolutionStrategy {
+            force "org.bouncycastle:bcprov-jdk18on:1.76"
+            force "org.bouncycastle:bcutil-jdk18on:1.76"
+            force "org.bouncycastle:bcpkix-jdk18on:1.76"
+            // Keep native deps aligned with RN 0.83.1 builds that support 16KB pages.
+            force "com.facebook.react:react-android:0.83.1"
+            force "com.facebook.react:hermes-android:0.14.0"
+            force "com.facebook.fbjni:fbjni:0.7.0"
+            force "com.facebook.fresco:imagepipeline-native:3.6.0"
+            force "com.facebook.fresco:nativeimagefilters:3.6.0"
+            force "com.facebook.fresco:nativeimagetranscoder:3.6.0"
+            dependencySubstitution {
+                substitute module("org.bouncycastle:bcprov-jdk18on") using module("org.bouncycastle:bcprov-jdk18on:1.76")
+                substitute module("org.bouncycastle:bcutil-jdk18on") using module("org.bouncycastle:bcutil-jdk18on:1.76")
+                substitute module("org.bouncycastle:bcpkix-jdk18on") using module("org.bouncycastle:bcpkix-jdk18on:1.76")
             }
         }
     }
 }
+
+subprojects { sp ->
+    sp.buildscript {
+        configurations.configureEach {
+            resolutionStrategy {
+                force "org.bouncycastle:bcprov-jdk18on:1.76"
+                force "org.bouncycastle:bcutil-jdk18on:1.76"
+                force "org.bouncycastle:bcpkix-jdk18on:1.76"
+                dependencySubstitution {
+                    substitute module("org.bouncycastle:bcprov-jdk18on") using module("org.bouncycastle:bcprov-jdk18on:1.76")
+                    substitute module("org.bouncycastle:bcutil-jdk18on") using module("org.bouncycastle:bcutil-jdk18on:1.76")
+                    substitute module("org.bouncycastle:bcpkix-jdk18on") using module("org.bouncycastle:bcpkix-jdk18on:1.76")
+                }
+            }
+        }
+    }
+    sp.plugins.withId("com.android.library") {
+        if (sp.hasProperty("android") && sp.android.hasProperty("buildFeatures") && sp.android.buildFeatures.hasProperty("buildConfig")) {
+            sp.android.buildFeatures.buildConfig = true
+        }
+        if (sp.hasProperty("android") && !sp.android.namespace) {
+            def manifestFile = file("${sp.projectDir}/src/main/AndroidManifest.xml")
+            if (manifestFile.exists()) {
+                def matcher = (manifestFile.getText("UTF-8") =~ /package=\"([^\"]+)\"/)
+                if (matcher.find()) {
+                    sp.android.namespace = matcher.group(1)
+                }
+            }
+        }
+    }
+    sp.plugins.withId("com.android.application") {
+        if (sp.hasProperty("android") && sp.android.hasProperty("buildFeatures") && sp.android.buildFeatures.hasProperty("buildConfig")) {
+            sp.android.buildFeatures.buildConfig = true
+        }
+    }
+
+    if (sp.hasProperty("android")) {
+        sp.afterEvaluate { proj ->
+            proj.android {
+                compileOptions {
+                    sourceCompatibility JavaVersion.VERSION_17
+                    targetCompatibility JavaVersion.VERSION_17
+                }
+                if (it.hasProperty("buildFeatures") && it.buildFeatures.hasProperty("buildConfig")) {
+                    it.buildFeatures.buildConfig = true
+                }
+            }
+        }
+    }
+
+    tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+        kotlinOptions {
+            jvmTarget = "17"
+        }
+    }
+
+    tasks.withType(JavaCompile).configureEach {
+        sourceCompatibility = JavaVersion.VERSION_17.toString()
+        targetCompatibility = JavaVersion.VERSION_17.toString()
+    }
+
+    configurations.all {
+        resolutionStrategy {
+            // Edge-to-edge friendly version (Android 15)
+            force "androidx.activity:activity:1.9.2"
+            force "androidx.activity:activity-ktx:1.9.2"
+            force "androidx.exifinterface:exifinterface:1.3.6"
+            // Force Bouncy Castle artifacts to a version without Java 21 classfiles to avoid
+            // "Unsupported class file major version 65" during Gradle instrumentation.
+            force "org.bouncycastle:bcprov-jdk18on:1.76"
+            force "org.bouncycastle:bcutil-jdk18on:1.76"
+            force "org.bouncycastle:bcpkix-jdk18on:1.76"
+            dependencySubstitution {
+                substitute module("org.bouncycastle:bcprov-jdk18on") using module("org.bouncycastle:bcprov-jdk18on:1.76")
+                substitute module("org.bouncycastle:bcutil-jdk18on") using module("org.bouncycastle:bcutil-jdk18on:1.76")
+                substitute module("org.bouncycastle:bcpkix-jdk18on") using module("org.bouncycastle:bcpkix-jdk18on:1.76")
+            }
+        }
+    }
+}
+
+apply plugin: "com.facebook.react.rootproject"

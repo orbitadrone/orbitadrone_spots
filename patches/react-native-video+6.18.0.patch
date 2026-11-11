@@ -1,0 +1,83 @@
+diff --git a/node_modules/react-native-video/android/build.gradle b/node_modules/react-native-video/android/build.gradle
+index 748b799..ca68674 100644
+--- a/node_modules/react-native-video/android/build.gradle
++++ b/node_modules/react-native-video/android/build.gradle
+@@ -106,7 +106,7 @@ def configStringPath = ExoplayerDependencies
+ 
+ android {
+     if (supportsNamespace()) {
+-        namespace 'com.brentvatne.react'
++        namespace = 'com.brentvatne.react'
+ 
+         sourceSets {
+             main {
+@@ -154,14 +154,14 @@ android {
+     }
+ 
+     buildFeatures {
+-        buildConfig true
++        buildConfig = true
+     }
+ 
+     packagingOptions {
+         exclude "**/libreact_render*.so"
+     }
+ 
+-    buildDir 'buildOutput_' + configStringPath
++    buildDir = 'buildOutput_' + configStringPath
+ 
+     sourceSets {
+         main {
+@@ -215,7 +215,7 @@ repositories {
+     google()
+     maven {
+         // All of React Native (JS, Obj-C sources, Android binaries) is installed from npm
+-        url "$rootDir/../node_modules/react-native/android"
++        url = "$rootDir/../node_modules/react-native/android"
+     }
+     mavenCentral()
+ }
+diff --git a/node_modules/react-native-video/android/src/main/java/com/brentvatne/exoplayer/PictureInPictureUtil.kt b/node_modules/react-native-video/android/src/main/java/com/brentvatne/exoplayer/PictureInPictureUtil.kt
+index 5e36ef2..c7e3195 100644
+--- a/node_modules/react-native-video/android/src/main/java/com/brentvatne/exoplayer/PictureInPictureUtil.kt
++++ b/node_modules/react-native-video/android/src/main/java/com/brentvatne/exoplayer/PictureInPictureUtil.kt
+@@ -57,16 +57,37 @@ object PictureInPictureUtil {
+ 
+         activity.addOnPictureInPictureModeChangedListener(onPictureInPictureModeChanged)
+ 
++        var removeUserLeaveHint: (() -> Unit)? = null
+         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+-            activity.addOnUserLeaveHintListener(onUserLeaveHintCallback)
++            try {
++                val addMethod = ComponentActivity::class.java.getMethod(
++                    "addOnUserLeaveHintListener",
++                    Runnable::class.java
++                )
++                addMethod.invoke(activity, onUserLeaveHintCallback)
++
++                removeUserLeaveHint = {
++                    try {
++                        val removeMethod = ComponentActivity::class.java.getMethod(
++                            "removeOnUserLeaveHintListener",
++                            Runnable::class.java
++                        )
++                        removeMethod.invoke(activity, onUserLeaveHintCallback)
++                    } catch (_: Exception) {
++                        // No-op if the method is missing on this Activity implementation.
++                    }
++                }
++            } catch (_: Exception) {
++                // The current ComponentActivity doesn't expose the leave-hint listener helpers.
++            }
+         }
+ 
+         // @TODO convert to lambda when ReactExoplayerView migrated
+         return Runnable {
+             with(activity) {
+                 removeOnPictureInPictureModeChangedListener(onPictureInPictureModeChanged)
+-                removeOnUserLeaveHintListener(onUserLeaveHintCallback)
+             }
++            removeUserLeaveHint?.invoke()
+         }
+     }
+ 

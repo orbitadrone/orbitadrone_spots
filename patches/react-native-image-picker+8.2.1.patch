@@ -1,0 +1,36 @@
+diff --git a/node_modules/react-native-image-picker/android/build.gradle b/node_modules/react-native-image-picker/android/build.gradle
+index cecc20d..4f16a4a 100644
+--- a/node_modules/react-native-image-picker/android/build.gradle
++++ b/node_modules/react-native-image-picker/android/build.gradle
+@@ -8,11 +8,11 @@ if (isNewArchitectureEnabled()) {
+ }
+ 
+ android {
+-    compileSdkVersion 35
++    compileSdkVersion safeExtGet('compileSdkVersion', 34)
+ 
+     def agpVersion = com.android.Version.ANDROID_GRADLE_PLUGIN_VERSION
+     if (agpVersion.tokenize('.')[0].toInteger() >= 7) {
+-        namespace "com.imagepicker"
++        namespace = "com.imagepicker"
+     }
+ 
+     // Used to override the NDK path/version on internal CI or by allowing
+@@ -21,7 +21,7 @@ android {
+         ndkPath rootProject.ext.ndkPath
+     }
+     if (rootProject.hasProperty("ndkVersion")) {
+-        ndkVersion rootProject.ext.ndkVersion
++        ndkVersion = rootProject.ext.ndkVersion
+     }
+ 
+     defaultConfig {
+@@ -53,7 +53,7 @@ android {
+ repositories {
+   maven {
+     // All of React Native (JS, Obj-C sources, Android binaries) is installed from npm
+-    url "${rootDir}/../node_modules/react-native/android"
++    url = "${rootDir}/../node_modules/react-native/android"
+   }
+   mavenCentral()
+   google()

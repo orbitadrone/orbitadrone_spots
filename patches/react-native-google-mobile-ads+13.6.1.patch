@@ -1,0 +1,22 @@
+diff --git a/node_modules/react-native-google-mobile-ads/android/build.gradle b/node_modules/react-native-google-mobile-ads/android/build.gradle
+index 16ec7a3..76d04a4 100644
+--- a/node_modules/react-native-google-mobile-ads/android/build.gradle
++++ b/node_modules/react-native-google-mobile-ads/android/build.gradle
+@@ -100,7 +100,7 @@ if (!appJSONGoogleMobileAdsAppIDString) {
+ 
+ android {
+   defaultConfig {
+-    multiDexEnabled true
++    multiDexEnabled = true
+     manifestPlaceholders = [
+       appJSONGoogleMobileAdsAppID                  : appJSONGoogleMobileAdsAppIDString,
+       appJSONGoogleMobileAdsDelayAppMeasurementInit: appJSONGoogleMobileAdsDelayAppMeasurementInitBool,
+@@ -111,7 +111,7 @@ android {
+   }
+   lintOptions {
+     disable 'GradleCompatible'
+-    abortOnError false
++    abortOnError = false
+   }
+   compileOptions {
+     sourceCompatibility JavaVersion.VERSION_1_8

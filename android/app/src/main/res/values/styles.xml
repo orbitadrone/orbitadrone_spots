@@ -10,6 +10,10 @@
         <item name="android:textColorSecondary">#FF000000</item>
         <item name="android:textColorHint">#FF000000</item>
         <item name="android:textColorLink">#FF0A66C2</item>
+        <!-- Edge-to-edge defaults for Android 15+ -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
     </style>
 
 </resources>

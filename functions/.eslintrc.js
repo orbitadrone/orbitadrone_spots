@@ -1,10 +1,11 @@
 module.exports = {
+  root: true,
   env: {
     es6: true,
     node: true,
   },
   parserOptions: {
-    "ecmaVersion": 2018,
+    "ecmaVersion": 2022,
   },
   extends: [
     "eslint:recommended",
@@ -13,7 +14,12 @@ module.exports = {
   rules: {
     "no-restricted-globals": ["error", "name", "length"],
     "prefer-arrow-callback": "error",
-    "quotes": ["error", "double", {"allowTemplateLiterals": true}],
+    // Keep functional checks strict, but relax style-only rules for now.
+    "quotes": "off",
+    "indent": "off",
+    "max-len": "off",
+    "operator-linebreak": "off",
+    "arrow-parens": "off",
   },
   overrides: [
     {

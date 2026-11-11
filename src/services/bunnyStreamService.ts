@@ -1,10 +1,13 @@
 import { BUNNY_UPLOAD_ENDPOINT as RAW_UPLOAD_ENDPOINT, BUNNY_CDN_HOST as RAW_BUNNY_CDN_HOST } from '@env';
 import { getFreshIdToken } from './authSession';
 import { uploadFile } from './storageService';
+import logger from '../utils/logger';
 
 const BUNNY_UPLOAD_ENDPOINT = RAW_UPLOAD_ENDPOINT?.trim();
-const UPLOAD_TIMEOUT_MS = 4 * 60 * 1000;
+const UPLOAD_TIMEOUT_MS = 15 * 60 * 1000;
 const BACKEND_HEALTH_TIMEOUT_MS = 5000;
+const TRANSIENT_UPLOAD_RETRY_COUNT = 1;
+const TRANSIENT_UPLOAD_RETRY_DELAY_MS = 1500;
 
 type BunnyUploadErrorCode =
   | 'bunny/auth-required'
@@ -68,18 +71,15 @@ const ensureBackendReachable = async () => {
       signal: controller.signal,
     });
     if (!response.ok) {
-      throw buildUploadError(
-        `[Bunny] Upload backend healthcheck failed (${response.status}).`,
-        'bunny/network',
-        response.status,
-      );
+      logger.warn('[Bunny] Upload backend healthcheck failed, continuing with upload', {
+        status: response.status,
+      });
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw buildUploadError(
-      `[Bunny] Upload backend is unreachable: ${message}`,
-      'bunny/network',
-    );
+    logger.warn('[Bunny] Upload backend healthcheck skipped due to network issue', {
+      message,
+    });
   } finally {
     clearTimeout(timeoutHandle);
   }
@@ -99,6 +99,30 @@ const shouldFallbackToStorage = (error: unknown) => {
     code.startsWith('storage/') ||
     status >= 400
   );
+};
+
+const isTransientUploadError = (error: unknown) => {
+  const code = String((error as any)?.code ?? '').toLowerCase();
+  const status = Number((error as any)?.status ?? 0);
+  const responseText = String((error as any)?.responseText ?? '').toLowerCase();
+  const message = String((error as any)?.message ?? '').toLowerCase();
+
+  if (code === 'bunny/timeout') {
+    return true;
+  }
+
+  if (code === 'bunny/network' && status === 0) {
+    return true;
+  }
+
+  const looksTimeout =
+    responseText.includes('timeout') ||
+    responseText.includes('timed out') ||
+    message.includes('timeout') ||
+    message.includes('timed out') ||
+    message.includes('aborted');
+
+  return looksTimeout;
 };
 
 const seemsAuthFailure = (status: number, responseText: string) => {
@@ -122,6 +146,7 @@ export const uploadVideoToBunny = async ({
   title,
   onProgress,
   fallbackStoragePrefix = 'drone_posts',
+  allowStorageFallback = false,
 }: {
   uri: string;
   name?: string;
@@ -129,20 +154,21 @@ export const uploadVideoToBunny = async ({
   title?: string;
   onProgress?: (payload: { loaded: number; total: number }) => void;
   fallbackStoragePrefix?: string;
+  allowStorageFallback?: boolean;
 }) => {
   if (!uri) {
     throw new Error('No video uri provided for Bunny upload.');
   }
 
   if (!BUNNY_UPLOAD_ENDPOINT) {
-    console.error(
+    logger.error(
       '[Bunny] Backend endpoint is not configured. Set BUNNY_UPLOAD_ENDPOINT in .env',
     );
     throw new Error('Bunny backend endpoint is not configured.');
   }
 
   if (__DEV__) {
-    console.log('[Bunny] Uploading via backend endpoint', {
+    logger.log('[Bunny] Uploading via backend endpoint', {
       uri,
       name,
       contentType,
@@ -152,17 +178,6 @@ export const uploadVideoToBunny = async ({
 
   await ensureBackendReachable();
 
-  const fd = new FormData();
-  fd.append('file', {
-    uri: uri,
-    type: contentType ?? 'video/mp4',
-    name: name ?? 'upload.mp4',
-  } as any);
-
-  if (title) {
-    fd.append('title', title);
-  }
-
   let idToken = '';
   try {
     idToken = await getFreshIdToken('bunny_upload', {
@@ -170,7 +185,7 @@ export const uploadVideoToBunny = async ({
       timeoutMs: 15000,
     });
   } catch (tokenError) {
-    console.warn('[Bunny] Missing valid auth token for upload', tokenError);
+    logger.warn('[Bunny] Missing valid auth token for upload', tokenError);
     throw buildUploadError(
       '[Bunny] Missing valid auth token for upload.',
       'bunny/auth-required',
@@ -182,8 +197,21 @@ export const uploadVideoToBunny = async ({
     Authorization: `Bearer ${idToken}`,
   };
 
-  try {
-    return await new Promise<{ guid: string; playbackUrl: string }>((resolve, reject) => {
+  const buildFormData = () => {
+    const fd = new FormData();
+    fd.append('file', {
+      uri: uri,
+      type: contentType ?? 'video/mp4',
+      name: name ?? 'upload.mp4',
+    } as any);
+    if (title) {
+      fd.append('title', title);
+    }
+    return fd;
+  };
+
+  const uploadViaBackend = async () =>
+    new Promise<{ guid: string; playbackUrl: string }>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', BUNNY_UPLOAD_ENDPOINT, true);
       xhr.timeout = UPLOAD_TIMEOUT_MS;
@@ -220,7 +248,7 @@ export const uploadVideoToBunny = async ({
               return;
             }
             const parseError = e instanceof Error ? e.message : String(e);
-            console.warn('[Bunny] Failed to parse backend response', parseError, xhr.responseText);
+            logger.warn('[Bunny] Failed to parse backend response', parseError, xhr.responseText);
             reject(
               buildUploadError(
                 `Failed to parse backend response: ${parseError}`,
@@ -233,7 +261,7 @@ export const uploadVideoToBunny = async ({
         } else {
           const responseText = xhr.responseText || '';
           const isAuthFailure = seemsAuthFailure(xhr.status, responseText);
-          console.warn('[Bunny] Backend upload failed', {
+          logger.warn('[Bunny] Backend upload failed', {
             status: xhr.status,
             response: responseText,
           });
@@ -249,22 +277,24 @@ export const uploadVideoToBunny = async ({
       };
 
       xhr.onerror = () => {
-        console.warn('[Bunny] Network request failed', {
+        const responseText = xhr.responseText || '';
+        const timeoutLike = /timeout|timed out/i.test(responseText);
+        logger.warn('[Bunny] Network request failed', {
           status: xhr.status,
-          response: xhr.responseText,
+          response: responseText,
         });
         reject(
           buildUploadError(
-            '[Bunny] Network request failed.',
-            'bunny/network',
+            timeoutLike ? '[Bunny] Upload request timed out.' : '[Bunny] Network request failed.',
+            timeoutLike ? 'bunny/timeout' : 'bunny/network',
             xhr.status || 0,
-            xhr.responseText || '',
+            responseText,
           ),
         );
       };
 
       xhr.ontimeout = () => {
-        console.warn('[Bunny] Upload request timed out');
+        logger.warn('[Bunny] Upload request timed out');
         reject(
           buildUploadError(
             '[Bunny] Upload request timed out.',
@@ -275,14 +305,40 @@ export const uploadVideoToBunny = async ({
         );
       };
 
-      xhr.send(fd);
+      xhr.send(buildFormData());
     });
+
+  try {
+    let transientRetries = 0;
+    while (true) {
+      try {
+        return await uploadViaBackend();
+      } catch (attemptError) {
+        if (
+          transientRetries >= TRANSIENT_UPLOAD_RETRY_COUNT ||
+          !isTransientUploadError(attemptError)
+        ) {
+          throw attemptError;
+        }
+        transientRetries += 1;
+        logger.warn('[Bunny] Retrying upload after transient network failure', {
+          retry: transientRetries,
+          maxRetries: TRANSIENT_UPLOAD_RETRY_COUNT,
+          code: (attemptError as any)?.code,
+          status: (attemptError as any)?.status,
+          response: (attemptError as any)?.responseText,
+        });
+        await new Promise<void>(resolve => {
+          setTimeout(() => resolve(), TRANSIENT_UPLOAD_RETRY_DELAY_MS);
+        });
+      }
+    }
   } catch (uploadError) {
-    if (!shouldFallbackToStorage(uploadError)) {
+    if (!allowStorageFallback || !shouldFallbackToStorage(uploadError)) {
       throw uploadError;
     }
 
-    console.warn('[Bunny] Falling back to Firebase Storage upload', {
+    logger.warn('[Bunny] Falling back to Firebase Storage upload', {
       code: (uploadError as any)?.code,
       status: (uploadError as any)?.status,
     });
@@ -301,7 +357,7 @@ export const uploadVideoToBunny = async ({
         playbackUrl,
       };
     } catch (fallbackError) {
-      console.error('[Bunny] Storage fallback failed', fallbackError);
+      logger.error('[Bunny] Storage fallback failed', fallbackError);
       const fallbackCode = String((fallbackError as any)?.code ?? '').toLowerCase();
       if (fallbackCode) {
         const enrichedError = fallbackError instanceof Error
