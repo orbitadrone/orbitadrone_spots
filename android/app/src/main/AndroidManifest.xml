@@ -82,8 +82,9 @@
         android:name="com.google.android.gms.ads.APPLICATION_ID"
         android:value="ca-app-pub-7840437883541028~5757372794"
         tools:replace="android:value" />
+      <!-- Small notification icons use transparency, separately from the white launcher background. -->
       <meta-data
         android:name="com.google.firebase.messaging.default_notification_icon"
-        android:resource="@mipmap/ic_launcher" />
+        android:resource="@drawable/orbitadrone_logo" />
     </application>
 </manifest>

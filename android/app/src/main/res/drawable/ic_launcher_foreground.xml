@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Keep the existing logo within the adaptive icon's 66dp safe area. -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:insetLeft="19.444444%"
+    android:insetTop="19.444444%"
+    android:insetRight="19.444444%"
+    android:insetBottom="19.444444%">
+    <bitmap
+        android:src="@drawable/orbitadrone_logo"
+        android:gravity="fill"
+        android:filter="true" />
+</inset>
